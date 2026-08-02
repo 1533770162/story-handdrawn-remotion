@@ -9,9 +9,9 @@ description: 用 Remotion 制作「手绘日记漫画风」故事视频：白底
 
 这套方法适合任何「生活叙事」类内容：日记、童话、亲情故事、教学小品、产品步骤插画。只要画面能拆成"独立的一句一画"，就能用这套流程制作。
 
-**工具链**：apiz CLI（图片生成，`fal-ai/nano-banana-2`）+ ffmpeg（master 切三层 + caption 自动检测）+ MiniMax T2A v2（默认旁白，apiz speak → 直连 fallback）+ edge-tts（免费可选）+ Remotion（React 控揭示/翻页/渲染）。
+**工具链**：agnes（Agnes Image 2.1 Flash，默认且当前免费） / apiz CLI（`fal-ai/nano-banana-2`，付费可选）+ ffmpeg（master 切三层 + caption 自动检测）+ MiniMax T2A v2（默认旁白） / edge-tts（免费可选）+ Remotion（React 控揭示/翻页/渲染）。
 
-**规范样板**：第一集成品工程在 `<VIDEO_WORKSPACE>/handdrawn-story-ep01/`。遇到排版、节奏、prompt 拿不准的时候，先看它的 `storyboard.json` 和 `prompts/` 下的 master prompt 留底。
+**规范样板**：第一集成品工程在 `<VIDEO_WORKSPACE>/handdrawn-story-ep01/`（apiz + image2）。agnes + font 模式样板在 `<VIDEO_WORKSPACE>/yueyanglou-ji/`（免费全流程）。遇到排版、节奏、prompt 拿不准的时候，先看它们的 `storyboard.json` 和 `prompts/` 下的 master prompt 留底。
 
 **配套参考**：
 - 完整 pipeline（三输入 + 双转场 + 三层切分 + 配音回写）：`references/pipeline.md`
@@ -88,12 +88,20 @@ cd "<VIDEO_WORKSPACE>/<项目名>" && npm install
 - `public/assets/generated/` — apiz 产出的 master 占位
 - `references/style-bw.png` + `style-color.png` — 风格锚点参考图（**必备**，缺了脚本会 hard fail）
 
-### 5. 选输入模式 + 选转场
+### 5. 选输入模式 + 选后端 + 选转场
 
 | 输入 | 命令 |
 |---|---|
 | 故事文本（默认） | `python scripts/gen_story_images.py examples/story.txt --title "..."` |
 | 上传图片 | `node scripts/import_uploaded_pages.mjs --image 01.jpg --image 02.jpg --title "..."` |
+
+后端选项（`--backend`）：
+- `agnes`（默认，Agnes Image 2.1 Flash，当前 $0/张免费，高密度中文手绘风）
+- `apiz`（fal-ai/nano-banana-2，付费，老样板用这个）
+
+字幕渲染（`--text-mode`，**未传时按后端自动选**）：
+- `agnes` 后端 → 自动用 `font`（MaShanZheng 字体，agnes 不会画中文汉字）
+- `apiz` 后端 → 自动用 `image2`（apiz 在画板上画手写体）
 
 转场选项：
 - `--transition cut`（默认，硬切）
@@ -107,20 +115,26 @@ python scripts/gen_story_images.py examples/story.txt \
   --character-lock "固定两位主角：父亲约35岁..." \
   --visual-plan visual_plan.json \
   --transition cut
+# --backend 默认 agnes，--text-mode 默认按后端自动选（agnes→font / apiz→image2）
 ```
 
 脚本流程：
 1. 校验 `references/style-bw.png` + `style-color.png` 存在
 2. 分句 + formatCaption + durationFor 估时
 3. 生成 `00_character_reference.png`（角色身份锚点）
-4. `apiz upload` 上传 character_reference 到 CDN
-5. 每句生成 master（用 character_reference 当 image_url，nano-banana-2 锁身份）
-6. ffmpeg 切三层：text_image / bw / color
+4. 后端为 apiz 时：`apiz upload` 上传 character_reference 到 CDN；后端为 agnes 时：跳过上传，后续 master 走 data URI 图生图
+5. 每句生成 master（用 character_reference 锁身份：apiz 用 image_url，agnes 用 extra_body.image data URI）
+6. ffmpeg 切三层：text_image / bw / color（font 模式下 text_image 不切，由 Remotion TextWipe 实时渲染字幕）
 7. 写 `storyboard.json`（含 `narration` 字段供 TTS 用）
 
 **dry-run 先看 prompt**：
 ```bash
 python scripts/gen_story_images.py examples/story.txt --title "..." --dry-run
+```
+
+**切后端到 apiz**（仅当 agnes 不可用或要复用老样板）：
+```bash
+python scripts/gen_story_images.py examples/story.txt --backend apiz --text-mode image2
 ```
 
 ### 7. 生成旁白（gen_tts.py，默认 MiniMax）
@@ -147,6 +161,8 @@ python scripts/gen_tts.py narration.yaml --out-dir public/audio/narration
 python scripts/gen_tts.py narration.yaml --backend edge --out-dir public/audio/narration
 # voice 自动切 zh-CN-XiaoyiNeural（女声）；可在 yaml 显式指定其他 voice
 ```
+
+⚠️ **edge-tts 命名陷阱**：edge 输出 `1.mp3 2.mp3 ...`（无前导 0），timeline.json 的 id 是 int（1/2/3...），而 storyboard 期望 `sXX.mp3` + string id。必须跑一个修复脚本：rename 成 `sXX.mp3` 格式 + 重写 timeline ids 为零填充 string + 把 storyboard 的 narration_audio 改成 `/audio/narration/sXX.mp3`。参考 `yueyanglou-ji/_fix_audio.py`。MiniMax 不踩这个坑。
 
 产出 `s01.mp3 s02.mp3 ...` + `timeline.json`（含 `frames_source` / `frames_playback`）。
 
@@ -208,8 +224,9 @@ ffprobe -v error -show_streams -show_format out/picture_silent.mp4
 | 墨色 | `#171714`，记号笔粗轮廓 + 蜡笔色块 |
 | 字幕字体 | 站酷马善政毛笔（MaShanZheng），1.34 行高，-0.35° 倾斜 |
 | 五色限定 | 鼠尾草绿 / 灰蓝 / 浅棕 / 砖红 / 暖黄（低饱和蜡笔色，禁止纯红/亮黄/荧光） |
-| 素材 | apiz nano-banana-2 生成真实 PNG，**不是**纯代码绘制 |
-| 图片生成 | apiz CLI，默认 `fal-ai/nano-banana-2`（最适合插画风），`image_size='portrait_4_3'` |
+| 素材 | agnes / apiz 生成真实 PNG，**不是**纯代码绘制 |
+| 图片生成 | 默认 agnes（`agnes-image-2.1-flash`，免费，ratio 2:3，2K = 1664×2496 缩到 master 1024×1536）；可选 apiz（`fal-ai/nano-banana-2`，`image_size='portrait_4_3'`） |
+| 字幕渲染 | 默认 font（MaShanZheng 字体，Remotion TextWipe 实时画） / image2（仅 apiz 支持图片模型画手写体，agnes 不会画中文） |
 | 默认配音 | MiniMax T2A v2，`female-shaonv`（apiz speak `speech-2.8-hd` → 直连 `speech-02-hd` fallback） |
 | 免费 fallback | edge-tts，`zh-CN-XiaoyiNeural`（女声），`pip install edge-tts` |
 | 输出 | H.264 MP4，默认含旁白音轨 |
@@ -236,12 +253,19 @@ ffprobe -v error -show_streams -show_format out/picture_silent.mp4
 
 ## 场景语法版式约定
 
-### 1. 标题场景（image2 模式）
+### 1. 标题场景（两种模式）
 
+**image2 模式**（仅 apiz 后端可用，需要图片模型在画板上画手写体字幕）：
 - 上半 y=0–510：手写体字幕（apiz 在 master 上画，ffmpeg 切出 text_image 层）
 - 下半 y=512–1536：彩色插画（1024×1024 正方形）
 - y=510–512：极窄过渡带（2px，实际几乎不可见）
-- 字幕区给到 510px 是因为 nano-banana-2 中文字号偏大，2-3 行字幕实际会画到 y=460-500；原来 y=342 的硬限会让第 2 行被切
+- 字幕区给到 510px 是因为 nano-banana-2 中文字号偏大，2-3 行字幕实际会画到 y=460-500
+
+**font 模式**（agnes 默认，apiz 也可用）：
+- 整张 master 1024×1536 全是彩色插画（agnes 不会画中文，所以不在画板上留字幕区）
+- 字幕由 Remotion 用 MaShanZheng 毛笔字体实时渲染（`TextWipe` 组件）
+- ffmpeg 不切 text_image 层（storyboard 的 `text_image=null`）
+- 排版完全可控，不依赖图片模型识字
 
 ### 2. 完整页上传（full_uploaded_page）
 
@@ -361,6 +385,11 @@ python -c "from PIL import Image; Image.open('out/check-s1.png').convert('RGB').
 - **MiniMax 配额耗尽** → `gen_tts.py --backend edge` 切免费 edge-tts（用户明说"用免费的"也用这个）。
 - **音频混合失败（audio-mixing 目录缺失）** → 根因是并发渲染竞争 Windows temp。模板已设 `Config.setConcurrency(1)`。⚠️ **绝对不要同时跑多个 `remotion render`**。
 - **第 2 行字幕被切** → 历史 bug：原来 `CAPTION_CROP_HEIGHT=342` 太小，nano-banana-2 中文字号偏大实际画到 y=460-500。已修：crop 高度 342→510、scale 1536:765、TextWipe 容器 height 288→420 / top 86→50、LayerWipe top 382→488。**4 处必须同步改**（`gen_story_images.py` 的 CAPTION_CROP_HEIGHT + scale + TextWipe.tsx 容器 + LayerWipe.tsx 容器）。如果只动 crop 不动容器，文字会被压扁。
+- **agnes 不会画中文汉字** → agnes 后端必须用 `--text-mode font`（默认就是）。image2 模式下 agnes 会忽略"上方留白字幕区"指令把整张画布画满，导致字幕无处可放。脚本已自动按后端选默认值，但显式传 `--backend agnes --text-mode image2` 仍会踩坑。
+- **agnes 上游 503 "Service busy" / 网络超时** → `lib_agnes.py` 自带 4 次指数退避（5/10/20/40s）。18 张图大概率要重试几次，正常现象。脚本对每场 master 自动 skip 已存在的，可反复重跑直到全 18 张完成。
+- **Windows GBK subprocess UnicodeDecodeError** → 含中文路径（如 `public/assets/generated/岳阳楼记-xxx/`）下，ffmpeg stderr 被 Python 默认按 GBK 解码炸掉。脚本所有 subprocess.run 已加 `encoding="utf-8", errors="replace"`。改脚本时新加 subprocess 也要带这两个参数。
+- **edge-tts 文件名/ID 陷阱** → `gen_tts.py --backend edge` 输出 `1.mp3`、`2.mp3`（无前导 0），`timeline.json` 的 id 是 int 1 而非 string "01"。`apply_timeline.py` 只能匹配 13-18 这种字符串/数字都相同的场景。修复：rename 成 `s01.mp3` 格式 + 重写 timeline ids 为零填充 string + 把 storyboard 的 narration_audio 改成 `/audio/narration/sXX.mp3`（参考 `yueyanglou-ji/_fix_audio.py`）。MiniMax 不踩这个坑（它用 `sXX.mp3`）。
+- **agnes 2:3 ratio at 2K = 1664×2496** → 必须 `_normalize_master` 缩到 1024×1536（脚本已自带逻辑，但若改了 ratio 要重新算）。
 
 ## 适用范围
 

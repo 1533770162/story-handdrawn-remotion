@@ -378,8 +378,8 @@ def main():
         "--visual-plan", help="可选 visual_plan.json（场景 id → 视觉方向）",
     )
     parser.add_argument(
-        "--text-mode", choices=["image2", "font"], default="image2",
-        help="caption 渲染方式：image2（让 apiz 画手写体，默认） / font（用 MaShanZheng 字体）",
+        "--text-mode", choices=["image2", "font"], default=None,
+        help="caption 渲染方式：image2（图片模型画手写体，仅 apiz 支持） / font（MaShanZheng 字体，agnes 必须用这个）。不传时按后端自动选：agnes→font，apiz→image2",
     )
     parser.add_argument(
         "--transition", choices=["cut", "page-flip"], default="cut",
@@ -406,6 +406,11 @@ def main():
         help="已存在的 master 也重新生成（默认跳过）",
     )
     args = parser.parse_args()
+
+    # text_mode 未显式指定时按后端自动选：agnes 不会画中文，必须用 font；apiz 默认 image2
+    if args.text_mode is None:
+        args.text_mode = "font" if args.backend == "agnes" else "image2"
+        print(f"  ℹ️ --text-mode 未指定，按后端 {args.backend} 自动选 {args.text_mode}")
 
     project_root = Path.cwd()
     story_path = Path(args.input).resolve()
