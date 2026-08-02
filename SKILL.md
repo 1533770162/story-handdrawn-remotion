@@ -360,7 +360,7 @@ python apply_timeline.py --use-playback
 - [ ] **narration_audio 已挂载**：每场 Scene 有 `<Audio>`，`audio.voiceover='active'`
 - [ ] **duration_sec 已回写**：用 timeline.json 真实时长，不是估时
 - [ ] **ffprobe 抽帧**：每场渲接近结尾的静帧，肉眼检查排版
-- [ ] **训练先验污染抽检**：master 生成后用 `analyze_image` MCP 并行检查所有场，确认没有不该有的角色（任何题材都可能中招，不限于历史）。任何一场 POLLUTED 都不能进 preview。详见 `references/prompt-recipes.md` 第十一节。
+- [ ] **训练先验污染抽检（建议但非阻塞）**：master 生成后可选用 `analyze_image` MCP 抽检，把污染情况告诉用户由其判断是否需要重生成。**污染不阻塞 preview**——用户更想看片，可以让视频先出，问题场事后再修。详见 `references/prompt-recipes.md` 第十一节。
 
 ## 静帧查看策略（重要）
 

@@ -333,7 +333,7 @@ for i in range(1, 11):
 #     and describe what you see. Be strict — even one wrong figure means POLLUTED."
 ```
 
-POLLUTED 的场次重生成，再走一遍验证。直到 100% CLEAN 才进 preview。
+POLLUTIED 的场次告诉用户，由用户决定：接受现状直接进 preview / 重生成部分场 / 走 v3 完整修复。**不要为了 100% CLEAN 自动卡死 preview 流程**——用户多次实测希望先出片再修。
 
 ### 完整修复脚本模板
 
@@ -378,15 +378,13 @@ for sid in TARGET:
 
 ```
 生成后发现污染？
-├─ 1-2 场污染 → 单场重生成（直接调脚本）
-└─ ≥3 场污染 → 走 v3 完整修复流程
-    1. 写 PILGRIM_LOCK_V3（正向身份 + CLOSE-UP + 2-3人）
-    2. 写 SANITIZED_TEXTS（替换所有触发词）
-    3. 临时去掉 image_ref（避免污染 reference forward）
-    4. 重生成污染场次
-    5. _compress_all.py → analyze_image 并行验证
-    6. POLLUTED 的再重生成，直到 100% CLEAN
-    7. 进 preview
+├─ 1-2 场污染 → 单场重生成（直接调脚本），其余正常进 preview
+└─ ≥3 场污染 → 先告诉用户污染情况，三选一：
+    A. 接受现状，直接进 preview（用户多次实测优先选这个）
+    B. 部分重生成（最多 1-2 轮，避免无止境 fix-loop）
+    C. 走 v3 完整修复流程（CLOSE-UP + sanitized text + 去掉 image_ref）
+
+⚠️ **绝对不要自动进入"直到 100% CLEAN 才进 preview"循环**——污染抽检是建议，不是阻塞。
 ```
 
 ### 何时只清洗部分场，不无脑全洗
