@@ -11,7 +11,12 @@ description: 用 Remotion 制作「手绘日记漫画风」故事视频：白底
 
 **工具链**：agnes（Agnes Image 2.1 Flash，默认且当前免费） / apiz CLI（`fal-ai/nano-banana-2`，付费可选）+ ffmpeg（master 切三层 + caption 自动检测）+ MiniMax T2A v2（默认旁白） / edge-tts（免费可选）+ Remotion（React 控揭示/翻页/渲染）。
 
-**规范样板**：第一集成品工程在 `<VIDEO_WORKSPACE>/handdrawn-story-ep01/`（apiz + image2）。agnes + font 模式样板在 `<VIDEO_WORKSPACE>/yueyanglou-ji/`（免费全流程）。遇到排版、节奏、prompt 拿不准的时候，先看它们的 `storyboard.json` 和 `prompts/` 下的 master prompt 留底。
+**规范样板**：
+- `<VIDEO_WORKSPACE>/handdrawn-story-ep01/` — 第一集成品工程（apiz + image2）
+- `<VIDEO_WORKSPACE>/yueyanglou-ji/` — agnes + font 模式，免费全流程
+- `<VIDEO_WORKSPACE>/mayflower-story/` — **训练先验污染修复范例**（v3 玩法，任何题材通用）
+
+遇到排版、节奏、prompt 拿不准的时候，先看它们的 `storyboard.json` 和 `prompts/` 下的 master prompt 留底。
 
 **配套参考**：
 - 完整 pipeline（三输入 + 双转场 + 三层切分 + 配音回写）：`references/pipeline.md`
@@ -56,6 +61,7 @@ description: 用 Remotion 制作「手绘日记漫画风」故事视频：白底
 - 代词指代不明（"他"指的是谁？）
 - 医疗场景（打针/手术）
 - 年龄敏感角色（孩子长大、老人回忆）
+- **任何题材都可能触发训练先验污染**（用户多次实测：家庭/医疗/商务/童话/历史都中过）→ 必读 `references/prompt-recipes.md` 第十一节，预规划 sanitized 文案 + CLOSE-UP 构图
 
 → 写 `visual_plan.json`，每场指定一个明确的视觉方向：
 
@@ -354,6 +360,7 @@ python apply_timeline.py --use-playback
 - [ ] **narration_audio 已挂载**：每场 Scene 有 `<Audio>`，`audio.voiceover='active'`
 - [ ] **duration_sec 已回写**：用 timeline.json 真实时长，不是估时
 - [ ] **ffprobe 抽帧**：每场渲接近结尾的静帧，肉眼检查排版
+- [ ] **训练先验污染抽检**：master 生成后用 `analyze_image` MCP 并行检查所有场，确认没有不该有的角色（任何题材都可能中招，不限于历史）。任何一场 POLLUTED 都不能进 preview。详见 `references/prompt-recipes.md` 第十一节。
 
 ## 静帧查看策略（重要）
 
@@ -390,6 +397,8 @@ python -c "from PIL import Image; Image.open('out/check-s1.png').convert('RGB').
 - **Windows GBK subprocess UnicodeDecodeError** → 含中文路径（如 `public/assets/generated/岳阳楼记-xxx/`）下，ffmpeg stderr 被 Python 默认按 GBK 解码炸掉。脚本所有 subprocess.run 已加 `encoding="utf-8", errors="replace"`。改脚本时新加 subprocess 也要带这两个参数。
 - **edge-tts 文件名/ID 陷阱** → `gen_tts.py --backend edge` 输出 `1.mp3`、`2.mp3`（无前导 0），`timeline.json` 的 id 是 int 1 而非 string "01"。`apply_timeline.py` 只能匹配 13-18 这种字符串/数字都相同的场景。修复：rename 成 `s01.mp3` 格式 + 重写 timeline ids 为零填充 string + 把 storyboard 的 narration_audio 改成 `/audio/narration/sXX.mp3`（参考 `yueyanglou-ji/_fix_audio.py`）。MiniMax 不踩这个坑（它用 `sXX.mp3`）。
 - **agnes 2:3 ratio at 2K = 1664×2496** → 必须 `_normalize_master` 缩到 1024×1536（脚本已自带逻辑，但若改了 ratio 要重新算）。
+- **训练先验污染** → agnes/apiz **任何题材**都可能从训练数据强塞刻板角色（不限历史；性别/种族/时代错位/场景标配都会发生，用户多次实测）。NEGATION suffix + character_lock 都压不住。修复走 **v3 玩法**：正向身份压过负向禁止（"ALL figures X" 比 "NO Y" 强）+ CLOSE-UP 构图 2-3 人上限（广角人群给模型塞人机会）+ sanitized text 替换触发词 + 纯文生图不用 character_reference（reference 本身被污染会 forward）。详见 `references/prompt-recipes.md` 第十一节。范例：`mayflower-story/_fix_pollution_v3.py`。修复后必须用 `analyze_image` MCP 并行验证所有场 CLEAN 才进 preview。
+- **agnes HTTP 500 也要重试** → `lib_agnes.py` 已扩展重试白名单到 `(500, 502, 503, 504)`（之前只重试 502-504）。500 通常是上游 `do_request_failed` 瞬时错，5s 后重试就好。
 
 ## 适用范围
 

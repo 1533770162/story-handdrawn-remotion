@@ -242,3 +242,159 @@ python gen_story_images.py examples/story.txt --title "..." --force
 | 配色太鲜艳 | style_lock 没强制 | 检查"selective muted wax-crayon only" + 五色限定 |
 | 人物头顶出画 | safe border 没生效 | 检查 prompt 末尾"safe border 10%"段是否完整 |
 | 画风变精致 | 模型 fallback | 检查 apiz 是否真的用了 nano-banana-2（看 `.last_generate.json`） |
+| 画面混入禁止人物（特定种族/性别/时代错位角色/不该有的配角） | 训练先验污染（任何题材都可能） | 见下一节「训练先验污染」，按 v3 玩法重生成 |
+
+## 十一、训练先验污染（必读，任何题材通用）
+
+### 症状
+
+**任何题材**做手绘日记风视频，模型都可能从训练数据强塞不该有的角色。表现：character_lock 写了"绝对禁止 X"，NEGATION suffix 也加上了 "ABSOLUTELY NO X"，但生成图里 X 还是出现，反复重试无效。
+
+这不是某类题材的特殊问题——只要模型训练数据对该题材有强先验就会触发。用户多次实测：家庭/医疗/商务/童话/历史/教育/PPT 步骤都中过。家庭故事塞进宠物，医疗场景默认男医生，商务场景塞白人男老板+亚洲女助理，儿童故事塞迪士尼式公主，全都是同一类问题。
+
+**一个完整案例（mayflower-story）**：五月花号故事 1-10 场只画英国清教徒，但 agnes 见到 "Mayflower/ship/harbor/cabin" 就强联想"感恩节 → 印第安人"，于是在英国清教徒群里塞进铜皮肤辫子羽毛的原住民。两轮 v1/v2 用 NEGATION suffix + PILGRIM_LOCK 强禁，仍泄露 6/10 场。v3 改用正向身份 + CLOSE-UP 才彻底修好。
+
+### 观察过的污染例子（非穷举，任何题材都可能有自己的版本）
+
+| 题材 | 触发词举例 | 模型可能强塞的刻板角色 |
+|---|---|---|
+| 五月花号/感恩节 | Mayflower, ship, harbor, Pilgrim | Wampanoag 印第安人 |
+| 家庭故事 | family, home, parent | 默认白人核心家庭 + 宠物 |
+| 医疗场景 | doctor, hospital, surgeon | 男医生（弱化女医生） |
+| 商务场景 | CEO, boss, meeting | 白人男老板 + 亚洲女助理 |
+| 童话 | princess, castle, prince | 迪士尼式公主（肤色/服饰） |
+| 校园/教育 | student, classroom | 特定种族比例 |
+| 古风/诗词 | 古风, 诗人, 汉服 | 时代错位的服饰/道具 |
+
+表里只是举例。**遇到污染时不要去对表查"我这是什么题材"——直接按下面 v3 玩法修。**
+
+### v3 玩法（4 个杠杆同时上）
+
+**1. 正向身份压过负向禁止**
+
+NEGATION（"NO Native Americans, NO feathers"）效果弱。**正向锁定**（"ALL figures are pale pink Caucasian English. ALL of them. No exceptions. ALL faces visibly pale pink"）效果强。先告诉模型"画谁"，再说"不画谁"。
+
+```
+✗ 弱：ABSOLUTELY NO Native Americans, NO copper skin, NO braids, NO feathers.
+✓ 强：ALL figures are pale pink Caucasian English people from 1620 Europe. ALL of them. No exceptions. ALL faces must be visibly pale pink. ALL clothing must be European wool or linen.
+```
+
+**2. CLOSE-UP 构图 + 2-3 人上限**
+
+广角人群镜头（4-7 人）给模型太多"塞人"的机会。强制特写：
+
+```
+CLOSE-UP portrait composition, ONLY 2 or 3 figures in the frame, no crowd, no group scenes.
+```
+
+每场把人物数压到 2-3 个，剩余画布用环境（绳索/桅杆/木墙）填，模型就没有空间塞禁角。
+
+**3. sanitized text：换掉触发词**
+
+prompt 里 `ship/harbor/cabin/Plymouth` 这种题材词全部换掉，破坏先验联想链：
+
+| 触发词 | 换成 |
+|---|---|
+| ship | wooden deck / wooden interior / vessel |
+| harbor | port / shore |
+| cabin | small wooden room / dim wooden room |
+| Mayflower | (移除，不直接命名船) |
+| Plymouth | coastline / new shore |
+
+**visual_plan.json 的 `text` 字段也要重写**，不只是 character_lock——master prompt 是从 `text` 拼出来的，触发词在那里出现一样会污染。
+
+**4. 纯文生图（不用 character_reference）**
+
+`00_character_reference.png` 是用同一个污染 prompt 生成的，本身可能就带禁角。后续 master 用 `image_ref` 引用它，禁角会被 forward 到所有场。
+
+修复时**临时切纯文生图模式**：删 `image_ref`，让每场独立从 PILGRIM_LOCK 重生成身份。一致性会下降，但污染可控。修好后再决定要不要重做 character_reference。
+
+### 验证流程（必做）
+
+修完后**不能裸眼看 master 就放行**——肉眼对单张图会疲劳漏判。流程：
+
+```bash
+# 1. 压成 jpg（agnes master 是 PNG，太大）
+python -c "
+from pathlib import Path
+from PIL import Image
+for i in range(1, 11):
+    src = Path(f'public/assets/generated/<asset>/{i:02d}_master.png')
+    if src.exists():
+        Image.open(src).convert('RGB').save(f'_check_scene{i:02d}.jpg', quality=85)
+"
+
+# 2. Read 工具读 jpg 拿 CDN URL（Windows 反斜杠路径会让 analyze_image 报 400，必须 Read 转链）
+
+# 3. analyze_image MCP 并行调（所有场景同时调，串行太慢）
+#    prompt 模板：
+#    "Check this image for training-data pollution. Specifically look for [禁忌人物特征].
+#     If you see ONLY [正确身份], respond 'CLEAN'. If you see ANY [禁忌人物], respond 'POLLUTED'
+#     and describe what you see. Be strict — even one wrong figure means POLLUTED."
+```
+
+POLLUTED 的场次重生成，再走一遍验证。直到 100% CLEAN 才进 preview。
+
+### 完整修复脚本模板
+
+参考 `<VIDEO_WORKSPACE>/mayflower-story/_fix_pollution_v3.py`。核心结构：
+
+```python
+PILGRIM_LOCK_V3 = (
+    "CLOSE-UP portrait composition, ONLY 2 or 3 figures in the frame, no crowd.\n\n"
+    "ALL figures are pale pink Caucasian English people from 1620 Europe. ALL of them.\n"
+    "1. [主角 A]: English man, about 30, pink skin, ...\n"
+    "2. [群演 B]: pale pink skin, ...\n\n"
+    "[五色配色] \n"
+    "ABSOLUTELY FORBIDDEN: [禁忌人物完整特征列表]"
+)
+
+SANITIZED_TEXTS = {
+    "02": "CLOSE-UP of three pale-skinned English passengers on a wooden deck...",
+    "04": "CLOSE-UP at night: a young pale-skinned English sailor in brown wool...",
+}
+
+NEGATION = (
+    "\n\nHARD CONSTRAINTS: CLOSE-UP shot, 2 or 3 figures MAXIMUM. "
+    "ALL figures pale-skinned English in 17th-century European wool. "
+    "ABSOLUTELY NO [禁忌]. If you draw [禁忌], the image is rejected."
+)
+
+for sid in TARGET:
+    base = gsi.build_master_prompt(
+        text=SANITIZED_TEXTS[sid],
+        caption=scene["text"],
+        visual_direction=str(visual_plan.get(sid, "")),
+        character_lock=PILGRIM_LOCK_V3,
+        text_mode_image2=False,
+    )
+    prompt = base + NEGATION
+    agnes_generate_image(prompt=prompt, out_path=master_path,
+                       model=AGNES_DEFAULT_MODEL, size="2K", ratio="2:3")
+    # 切三层 + 回写 storyboard
+```
+
+### 决策树
+
+```
+生成后发现污染？
+├─ 1-2 场污染 → 单场重生成（直接调脚本）
+└─ ≥3 场污染 → 走 v3 完整修复流程
+    1. 写 PILGRIM_LOCK_V3（正向身份 + CLOSE-UP + 2-3人）
+    2. 写 SANITIZED_TEXTS（替换所有触发词）
+    3. 临时去掉 image_ref（避免污染 reference forward）
+    4. 重生成污染场次
+    5. _compress_all.py → analyze_image 并行验证
+    6. POLLUTED 的再重生成，直到 100% CLEAN
+    7. 进 preview
+```
+
+### 何时只清洗部分场，不无脑全洗
+
+**故事某些场本就该画"那个看起来像污染的角色"**——比如五月花号故事 11-13 场春到后印第安人 Squanto 出场相助，那时候画面里的原住民是叙事必需，不是污染。**只清洗"不该出现"的场**，叙事正确的场不动。
+
+判断标准：当前的 sentence/caption 是否明确提到了那个角色？提到 = 该画（不洗）；没提到 = 污染（洗）。
+
+### v3 玩法是默认配置，不是少数特例
+
+用户多次实测多个题材都中招，所以**任何项目生完 master 都该跑一遍 analyze_image 抽检**。把抽检当标准流程的一部分，不要等到肉眼发现污染才补救——肉眼对单张图会疲劳漏判，等察觉时往往已经全部都需要重做了。

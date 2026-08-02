@@ -15,6 +15,7 @@ import base64
 import json
 import os
 import time
+import http.client
 import urllib.error
 import urllib.request
 from pathlib import Path
@@ -91,28 +92,45 @@ def _post(payload: dict, timeout: int = DEFAULT_TIMEOUT) -> dict:
                 return json.loads(resp.read().decode("utf-8"))
         except urllib.error.HTTPError as e:
             err_body = e.read().decode("utf-8", errors="replace")
-            if e.code in (502, 503, 504) and attempt < MAX_RETRIES - 1:
+            if e.code in (500, 502, 503, 504) and attempt < MAX_RETRIES - 1:
                 wait = 5 * (2 ** attempt)  # 5s, 10s, 20s, 40s
                 print(f"  ⚠️ agnes HTTP {e.code}（attempt {attempt+1}/{MAX_RETRIES}），{wait}s 后重试")
                 time.sleep(wait)
                 last_err = RuntimeError(f"agnes HTTP {e.code}: {err_body[:200]}")
                 continue
             raise RuntimeError(f"agnes HTTP {e.code}: {err_body[:500]}") from None
-        except (urllib.error.URLError, TimeoutError) as e:
+        except (urllib.error.URLError, TimeoutError,
+                http.client.RemoteDisconnected, http.client.BadStatusLine,
+                ConnectionResetError, ConnectionAbortedError) as e:
             if attempt < MAX_RETRIES - 1:
                 wait = 5 * (2 ** attempt)
-                print(f"  ⚠️ agnes 网络错 ({e})，{wait}s 后重试")
+                print(f"  ⚠️ agnes 网络错 ({type(e).__name__}: {e})，{wait}s 后重试")
                 time.sleep(wait)
                 last_err = e
                 continue
-            raise RuntimeError(f"agnes 网络超时: {e}") from None
+            raise RuntimeError(f"agnes 网络超时: {type(e).__name__}: {e}") from None
     raise RuntimeError(f"agnes 重试 {MAX_RETRIES} 次仍失败: {last_err}")
 
 
 def _download(url: str, out_path: Path) -> None:
-    req = urllib.request.Request(url, headers={"User-Agent": "story-handdrawn-skill"})
-    with urllib.request.urlopen(req, timeout=DEFAULT_TIMEOUT) as resp:
-        out_path.write_bytes(resp.read())
+    last_err: Exception | None = None
+    for attempt in range(MAX_RETRIES):
+        try:
+            req = urllib.request.Request(url, headers={"User-Agent": "story-handdrawn-skill"})
+            with urllib.request.urlopen(req, timeout=DEFAULT_TIMEOUT) as resp:
+                out_path.write_bytes(resp.read())
+            return
+        except (http.client.IncompleteRead, http.client.RemoteDisconnected,
+                ConnectionResetError, ConnectionAbortedError,
+                urllib.error.URLError, TimeoutError) as e:
+            last_err = e
+            if attempt < MAX_RETRIES - 1:
+                wait = 5 * (2 ** attempt)
+                print(f"  ⚠️ 下载断流 ({type(e).__name__})，{wait}s 后重试")
+                time.sleep(wait)
+                continue
+            raise RuntimeError(f"下载失败 {MAX_RETRIES} 次: {type(e).__name__}: {e}") from None
+    raise RuntimeError(f"下载失败: {last_err}")
 
 
 def generate_image(
