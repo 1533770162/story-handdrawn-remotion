@@ -66,11 +66,14 @@ def main():
         old_dur = scene.get("duration_sec")
         new_dur = round(frames / FPS, 2)
         scene["duration_sec"] = new_dur
-        # 同步把 narration_audio 路径写进去（让 Scene.tsx 能挂 <Audio>）
-        # timeline.file 是相对 public/ 的路径，staticFile 期望去掉 public/ 前缀
-        audio_rel = tl_map[sid].get("file", "")
+        # 同步把 narration_audio 路径写进去（让 Scene.tsx 能挂 <Audio>）。
+        # timeline.file 在 Windows 上可能是 public\audio\narration\s01.mp3，
+        # 统一成正斜杠并去掉 public/ 前缀，得到 Remotion staticFile 期望的
+        # "audio/narration/s01.mp3"（相对 public/，无前导斜杠）。
+        audio_rel = tl_map[sid].get("file", "").replace("\\", "/")
         if audio_rel.startswith("public/"):
             audio_rel = audio_rel[len("public/"):]
+        audio_rel = audio_rel.lstrip("/")
         scene["narration_audio"] = audio_rel
         print(f"  场景 {sid}: {old_dur}s → {new_dur}s (frames={frames}, {field}) audio={audio_rel}")
         updated += 1

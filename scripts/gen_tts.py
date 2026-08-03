@@ -1,22 +1,20 @@
-"""gen_tts.py — 故事手绘风视频的旁白配音（默认 MiniMax，可切 edge-tts 免费版）
+"""gen_tts.py — 故事手绘风视频的旁白配音（默认免费 edge-tts，可切 MiniMax）
 
 按场景生成旁白 mp3 + timeline.json（含每段时长，供 apply_timeline.py 回写 storyboard.json）。
 
-三档后端：
-  1. apiz speak（统一鉴权，内置下载，model=speech-2.8-hd）—— 默认首选
-  2. apiz 失败 → 自动 fallback 到直连 api.minimaxi.com/v1/t2a_v2
-     （从 .env 读 minimaxi=KEY，model=speech-02-hd）
-  3. --backend edge → 强制用 Microsoft Edge TTS（免费，离线）
-     （voice 默认 zh-CN-XiaoyiNeural 女声）
+后端（--backend）：
+  - edge（默认，免费）：Microsoft Edge TTS，无需 API key，voice 默认
+    zh-CN-XiaoyiNeural 女声。需 `pip install edge-tts`。
+  - minimax：apiz speak → 失败 fallback 直连 api.minimaxi.com/v1/t2a_v2
+    （从 .env 读 minimaxi=KEY，model=speech-02-hd）。音质更好但要额度，
+    仅在用户明确要高质量时用。
 
-输入 narration.yaml：
-  voice: female-shaonv     # minimax voice_id；edge 模式请在 backend: edge 时改 zh-CN-XiaoyiNeural
+输入 narration.yaml（id 用 s01/s02 字符串，避免 YAML 把 01 当八进制）：
+  voice: zh-CN-XiaoyiNeural   # edge 默认；minimax 用 female-shaonv
   speed: 1.0
   scenes:
     - id: s01
       text: "盛唐长安，万邦来朝……"
-    - id: s02
-      text: "..."
 
 输出：
   public/audio/narration/s01.mp3 s02.mp3 ...
@@ -37,7 +35,6 @@ import urllib.request
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent))
-from lib_apiz import speak as apiz_speak  # noqa: E402
 
 FPS = 30
 PLAYBACK_RATE = 1.2  # 交付节奏（对齐 sketch-story 系列默认）
@@ -155,18 +152,19 @@ def ffprobe_duration(path: Path) -> float:
 
 def gen_tts_with_fallback(
     text: str, out_path: Path, voice: str, speed: float,
-    backend: str = "minimax",
+    backend: str = "edge",
 ) -> str:
     """按 backend 选择 TTS 路径。返回用了哪条路径。
 
-    - backend='minimax'（默认）：apiz speak → 失败 fallback 直连 MiniMax API
-    - backend='edge'：直接用 edge-tts（免费）
+    - backend='edge'（默认，免费）：edge-tts，无需 API key
+    - backend='minimax'：apiz speak → 失败 fallback 直连 MiniMax API
     """
     if backend == "edge":
         call_tts_edge(text, out_path, voice=voice, speed=speed)
         return "edge"
 
-    # 默认 MiniMax 链路
+    # MiniMax 链路（lazy import：默认走 edge 的用户无需配置 apiz）
+    from lib_apiz import speak as apiz_speak  # noqa: E402
     try:
         apiz_speak(text, out_path, voice=voice, speed=speed)
         return "apiz"
@@ -187,7 +185,7 @@ def load_narration(path: Path) -> dict:
 
 def main():
     parser = argparse.ArgumentParser(
-        description="故事手绘风视频旁白配音（默认 MiniMax，可切 edge-tts 免费）+ 生成 timeline.json",
+        description="故事手绘风视频旁白配音（默认免费 edge-tts，可切 MiniMax 高质量）+ 生成 timeline.json",
     )
     parser.add_argument("narration_yaml", help="narration.yaml 路径")
     parser.add_argument(
@@ -195,8 +193,8 @@ def main():
         help="输出目录（默认 public/audio/narration/）",
     )
     parser.add_argument(
-        "--backend", choices=["minimax", "edge"], default="minimax",
-        help="TTS 后端：minimax（默认，apiz speak → 直连 fallback）/ edge（免费 edge-tts）",
+        "--backend", choices=["minimax", "edge"], default="edge",
+        help="TTS 后端：edge（默认，免费 edge-tts）/ minimax（apiz speak → 直连 fallback，音质更好但要额度）",
     )
     parser.add_argument("--dry-run", action="store_true", help="只打印不生成")
     args = parser.parse_args()

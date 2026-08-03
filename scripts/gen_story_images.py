@@ -24,6 +24,7 @@ import re
 import subprocess
 import sys
 import unicodedata
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent))
@@ -43,10 +44,7 @@ STYLE_LOCK = (
     "selective muted wax-crayon color only, no realistic shading, no paper texture, no watermark"
 )
 
-DEFAULT_CHARACTER_LOCK = (
-    "重复出现的主角须保持同一张脸、发型、年龄、服装配色和身体比例；"
-    "具体人物身份以故事原文为准；不得添加原文未提及的配角、道具或文字"
-)
+DEFAULT_CHARACTER_LOCK = ""
 
 # ============================================================================
 # 分句算法（直接照抄 story-to-video.mjs 的 splitStory / splitLongBeat / formatCaption）
@@ -327,10 +325,16 @@ def build_master_prompt(
             "for the scene. Keep the upper 510-pixel copy panel completely free of any illustration."
         )
     else:
-        caption_panel = "Use the entire canvas only for the illustration; do not add any text."
+        caption_panel = (
+            "The caption will be rendered separately by the video player — do NOT draw any "
+            "Chinese characters, English letters, numbers, labels, speech bubbles or writing "
+            "of any kind anywhere on the canvas. Leave all text areas as blank white paper."
+        )
         text_constraint = (
-            "no text, letters, numbers, labels, captions, speech bubbles, logo, "
-            "signature or watermark"
+            "absolutely no text, Chinese characters, English letters, numbers, labels, "
+            "captions, speech bubbles, calligraphy, handwriting, logo, signature or watermark. "
+            "The narrative sentence below is for CONTENT REFERENCE ONLY and must not appear "
+            "as written characters in the illustration"
         )
         illustration_panel = "Use the entire 1024×1024 square for the scene."
 
@@ -359,10 +363,31 @@ def build_master_prompt(
         if has_character_ref else ""
     )
 
+    # In font mode the caption is rendered by Remotion (TextWipe). agnes sees
+    # raw Chinese in the prompt and "helpfully" draws it as handwriting on the
+    # master, causing a double-caption. When an English visual_direction is
+    # supplied (i.e. --visual-plan), omit the Chinese sentence entirely — the
+    # English steering is enough and this is verified to keep the canvas
+    # text-free. Only feed Chinese when there's no visual_plan or in image2
+    # mode (where the model IS expected to draw the caption panel).
+    if text_mode_image2:
+        narrative_line = f'Narrative sentence to illustrate (use its exact words for the top caption): "{text}"'
+    elif visual_direction.strip():
+        narrative_line = (
+            "Narrative content is conveyed by the English Scene direction below. "
+            "Do NOT write any Chinese characters, English letters or sentence on "
+            "the canvas — the caption is added later by the video player."
+        )
+    else:
+        narrative_line = (
+            f'Content to depict VISUALLY — do NOT write or letter any of these '
+            f'characters on the canvas; the caption is added later: "{text}"'
+        )
+
     return f"""Use case: illustration-story
 Asset type: one vertical production master ({master_size}) for a hand-drawn Chinese diary-comic video. This single output will be locally split into a handwritten caption plate and a color illustration plate.
 {input_images_line}
-Narrative sentence to illustrate: "{text}"
+{narrative_line}
 Scene direction: {visual_direction}
 {protagonist_line}
 {character_lock}
@@ -433,6 +458,10 @@ def main():
     parser.add_argument(
         "--force", action="store_true",
         help="已存在的 master 也重新生成（默认跳过）",
+    )
+    parser.add_argument(
+        "--concurrency", type=int, default=4,
+        help="master 并发生成数（默认 4；agnes/apiz 是 IO 密集型，并发可把 15 张图时间砍到 1/4）",
     )
     args = parser.parse_args()
 
@@ -544,7 +573,9 @@ def main():
               f"如需角色锁，加 --character-ref 或 --character-ref-image <path>")
 
     # —— Step 2: 每句生成 master + 切三层 ——
-    scenes = []
+    # 先组装每场计划（prompt/path/caption），再并发生成 master（IO 密集），
+    # 最后串行切三层 + 拼 storyboard。并发把 15 张图的墙钟时间砍到约 1/N。
+    scene_plans = []
     for i, text in enumerate(story_parts, 1):
         sid = f"{i:02d}"
         caption = format_caption(text)
@@ -560,59 +591,67 @@ def main():
             has_character_ref=use_character_ref,
         )
         (prompt_dir / f"{sid}_master.txt").write_text(prompt + "\n", encoding="utf-8")
+        scene_plans.append({
+            "sid": sid, "text": text, "caption": caption,
+            "duration": duration, "master_path": master_path, "prompt": prompt,
+        })
 
+    def _gen_master(plan):
+        sid = plan["sid"]
+        master_path = plan["master_path"]
+        if args.dry_run:
+            print(f"\n[{sid}] [dry-run] prompt first 200 chars: {plan['prompt'][:200]}...")
+            return sid
         if master_path.exists() and not args.force:
-            print(f"\n[{sid}] master 已存在，跳过生成")
-        elif args.dry_run:
-            print(f"\n[{sid}] [dry-run] master prompt:")
-            print(f"  sentence: {text}")
-            print(f"  caption: {caption.replace(chr(10), ' / ')}")
-            print(f"  duration: {duration}s")
-            print(f"  prompt first 200 chars: {prompt[:200]}...")
+            print(f"[{sid}] master 已存在，跳过")
+            return sid
+        print(f"[{sid}] 生成 master ({args.backend}) ...")
+        if args.backend == "agnes":
+            agnes_generate_image(
+                prompt=plan["prompt"], out_path=master_path,
+                model=AGNES_DEFAULT_MODEL, size="2K", ratio="2:3",
+                image_ref=char_ref_path if (char_ref_path and char_ref_path.exists()) else None,
+            )
         else:
-            print(f"\n[{sid}] 生成 master ({args.backend}) ...")
-            if args.backend == "agnes":
-                # agnes 图生图：character_reference 直接以 data URI 传入 extra_body.image
-                agnes_generate_image(
-                    prompt=prompt,
-                    out_path=master_path,
-                    model=AGNES_DEFAULT_MODEL,
-                    size="2K",
-                    ratio="2:3",  # 与 master 1024×1536 同比例
-                    image_ref=char_ref_path if char_ref_path.exists() else None,
-                )
-            else:
-                # apiz 图生图：character_reference 上传到 CDN，--image-url 引用
-                image_url_for_gen = char_ref_url
-                apiz_generate_image(
-                    prompt=prompt,
-                    out_path=master_path,
-                    model=args.model,
-                    image_size="portrait_4_3",  # 1080×1440 比例
-                    image_url=image_url_for_gen,
-                )
+            apiz_generate_image(
+                prompt=plan["prompt"], out_path=master_path, model=args.model,
+                image_size="portrait_4_3", image_url=char_ref_url,
+            )
+        print(f"[{sid}] ✓ done")
+        return sid
 
-        # 切三层（除非 dry-run）
-        if not args.dry_run and master_path.exists():
+    if not args.dry_run:
+        todo = [p for p in scene_plans if args.force or not p["master_path"].exists()]
+        if todo:
+            workers = max(1, min(args.concurrency, len(todo)))
+            print(f"\nℹ️  并发生成 {len(todo)} 张 master（workers={workers}）...")
+            with ThreadPoolExecutor(max_workers=workers) as ex:
+                list(as_completed([ex.submit(_gen_master, p) for p in todo]))
+        else:
+            print("\nℹ️  所有 master 已存在，跳过生成")
+
+    # 串行切三层 + 拼 scenes（ffmpeg 各自独立文件，但保持输出顺序稳定）
+    scenes = []
+    for plan in scene_plans:
+        sid = plan["sid"]
+        if not args.dry_run and plan["master_path"].exists():
             assets = split_master_into_layers(
-                master_path=master_path, asset_dir=asset_dir, scene_id=sid,
+                master_path=plan["master_path"], asset_dir=asset_dir, scene_id=sid,
                 project_root=project_root, text_mode_image2=(args.text_mode == "image2"),
             )
         else:
-            # dry-run 时只填占位路径
             assets = {
                 "text_image": f"assets/generated/{asset_set}/{sid}_text.png" if args.text_mode == "image2" else None,
                 "bw": f"assets/generated/{asset_set}/{sid}_bw.png",
                 "detail": None,
                 "color": f"assets/generated/{asset_set}/{sid}_color.png",
             }
-
         scenes.append({
             "id": sid,
-            "duration_sec": duration,
-            "text": caption,
-            "narration": text,  # TTS 用原文（含上下文，比 caption 长）
-            "visual": f"根据文案绘制一个单一、清楚、可画的白底日记漫画场景：{text}",
+            "duration_sec": plan["duration"],
+            "text": plan["caption"],
+            "narration": plan["text"],
+            "visual": f"根据文案绘制一个单一、清楚、可画的白底日记漫画场景：{plan['text']}",
             "shot": "story_beat",
             "layers": ["text", "bw_full", "color"],
             "color_hint": "仅使用元视频的鼠尾草绿、灰蓝、浅棕、砖红、暖黄等低饱和蜡笔色，保留大量纯白",
@@ -641,7 +680,7 @@ def main():
             "image_generator": f"{args.backend}-{'agnes-image-2.1-flash' if args.backend == 'agnes' else 'nano-banana-2'}",
             "audio": {
                 "voiceover": "pending",  # 跑完 gen_tts + apply_timeline 后变 'active'
-                "default_backend": "minimax",
+                "default_backend": "edge",  # 免费 edge-tts；要高质量加 --backend minimax
                 "bgm": "optional_bed_only",
                 "bgm_follows_text": False,
             },
