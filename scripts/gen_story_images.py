@@ -306,6 +306,7 @@ def build_master_prompt(
     visual_direction: str,
     character_lock: str,
     text_mode_image2: bool,
+    has_character_ref: bool = False,
 ) -> str:
     master_size = "1024x1536" if text_mode_image2 else "1024x1024"
     if text_mode_image2:
@@ -333,21 +334,45 @@ def build_master_prompt(
         )
         illustration_panel = "Use the entire 1024×1024 square for the scene."
 
+    if has_character_ref:
+        input_images_line = (
+            "Input images: the supplied original-video frames are style references; "
+            "the fixed protagonist character sheet is the identity reference. Ignore all text in references."
+        )
+        protagonist_line = (
+            "Create one concrete, immediately readable tableau for that sentence. "
+            "Use the locked recurring protagonists whenever the current sentence requires them."
+        )
+        continuity_line = (
+            "Continuity: preserve the locked character design. Use the fixed character sheet "
+            "only for the protagonist's identity, never copy its pose or composition."
+        )
+    else:
+        input_images_line = (
+            "Input images: the supplied original-video frames are style references only. Ignore all text in references."
+        )
+        protagonist_line = "Create one concrete, immediately readable tableau for that sentence."
+        continuity_line = ""
+
+    isolation_block = (
+        "\nNarrative isolation: show only people required by the current sentence."
+        if has_character_ref else ""
+    )
+
     return f"""Use case: illustration-story
 Asset type: one vertical production master ({master_size}) for a hand-drawn Chinese diary-comic video. This single output will be locally split into a handwritten caption plate and a color illustration plate.
-Input images: the supplied original-video frames are style references; the fixed protagonist character sheet is the identity reference. Ignore all text in references.
+{input_images_line}
 Narrative sentence to illustrate: "{text}"
 Scene direction: {visual_direction}
-Create one concrete, immediately readable tableau for that sentence. Use the locked recurring protagonists whenever the current sentence requires them.
-Character lock: {character_lock}
+{protagonist_line}
+{character_lock}
 Style: {STYLE_LOCK}
 {caption_panel}
 {illustration_panel}
-Composition: use a comfortably wide camera view. Keep the entire sparse scene in the lower-middle of its illustration square with generous white negative space. Reserve a clean white safe border of at least 10% on the left and right and 8% on the top and bottom. Every figure, limb, prop, building edge, roof, tree branch, rain stroke and motion mark must stay completely inside that safe border. Scale the scene down when necessary; never let any visible mark touch or cross a canvas edge.
-Color: selective muted wax-crayon color only: sage green, dusty blue, warm tan, brick red and warm yellow. Keep hair, trousers and other dark areas as black scribbles. Leave skin and most of the canvas pure white.
-Continuity: preserve the locked character design. Use the fixed character sheet only for the protagonist's identity, never copy its pose or composition. Include only people required by the current narrative sentence.
-Narrative isolation: the character lock defines identities, not an automatic cast list. Show only characters explicitly named in the current sentence or strictly required for its immediate action. Never add family bystanders. Never show a future daughter, rescued child, grandmother, father or any other supporting character before that person is introduced by the narration. Do not carry any person, prop or setting forward merely because it appeared in another scene.
-Constraints: non-graphic, emotionally restrained family storytelling; no visible impact, blood, wounds, bruises or injury; no cropped or partially visible subject, prop or background structure; no close-up framing; {text_constraint}; no graphite realism, gradients, detailed scenery or vector cleanliness.""".strip()
+Composition: use a comfortably wide camera view. Keep the scene in the lower-middle of its illustration square with generous white negative space. Reserve a clean white safe border of at least 10% on the left and right and 8% on the top and bottom; no visible mark should touch a canvas edge.
+Color: selective muted wax-crayon color only: sage green, dusty blue, warm tan, brick red and warm yellow. Keep hair, trousers and dark areas as black scribbles. Leave skin and most of the canvas pure white.
+{continuity_line}{isolation_block}
+Constraints: non-graphic, emotionally restrained family storytelling; no visible blood or injury; {text_constraint}; no graphite realism, gradients or vector cleanliness.""".strip()
 
 
 # ============================================================================
@@ -394,8 +419,12 @@ def main():
         help=f"apiz 模型 id（默认 {DEFAULT_IMAGE_MODEL}）",
     )
     parser.add_argument(
-        "--no-character-ref", action="store_true",
-        help="跳过生成 00_character_reference.png（不推荐，会丢失角色一致性）",
+        "--character-ref", action="store_true",
+        help="生成 00_character_reference.png 并用作图生图参考（默认关闭：纯文生图，避免角色立绘污染）",
+    )
+    parser.add_argument(
+        "--character-ref-image", default=None,
+        help="用户提供的角色参考图路径（开启图生图锁身份，跳过自动生成 00）",
     )
     parser.add_argument(
         "--dry-run", action="store_true",
@@ -457,10 +486,24 @@ def main():
     if args.visual_plan:
         visual_plan = json.loads(Path(args.visual_plan).read_text(encoding="utf-8"))
 
-    # —— Step 1: 生成 character_reference（除非 --no-character-ref）——
+    # —— Step 1: character_reference（默认关闭，纯文生图）——
+    # 只有 --character-ref（自动生成 00）或 --character-ref-image（用户提供）才开启图生图
     char_ref_url = None  # apiz CDN URL（仅 apiz 后端用）
-    char_ref_path = asset_dir / "00_character_reference.png"
-    if not args.no_character_ref:
+    char_ref_path = None
+    use_character_ref = False
+
+    if args.character_ref_image:
+        # 用户提供参考图
+        user_ref = Path(args.character_ref_image).resolve()
+        if not user_ref.exists():
+            raise SystemExit(f"--character-ref-image 文件不存在: {user_ref}")
+        char_ref_path = user_ref
+        use_character_ref = True
+        print(f"\n✓ 使用用户提供的角色参考图: {user_ref.name}")
+    elif args.character_ref:
+        # 自动生成 00_character_reference.png
+        char_ref_path = asset_dir / "00_character_reference.png"
+        use_character_ref = True
         if char_ref_path.exists() and not args.force:
             print(f"\n✓ character_reference 已存在，跳过（--force 可重生成）")
         else:
@@ -474,13 +517,12 @@ def main():
             else:
                 print(f"\n生成 character_reference ({args.backend}) ...")
                 if args.backend == "agnes":
-                    # agnes 文生图，无上传步骤（后续 master 走图生图时直接传 data URI）
                     agnes_generate_image(
                         prompt=char_prompt,
                         out_path=char_ref_path,
                         model=AGNES_DEFAULT_MODEL,
                         size="2K",
-                        ratio="1:1",  # 角色 reference 是正方形
+                        ratio="1:1",
                     )
                 else:
                     apiz_generate_image(
@@ -495,8 +537,11 @@ def main():
                 char_ref_url = apiz_upload(char_ref_path, folder="story-handdrawn")
                 print(f"  ✓ {char_ref_url}")
             except RuntimeError as e:
-                print(f"  ⚠️ 上传失败 ({e})，后续 master 将不带 character 参考图（角色一致性可能下降）")
+                print(f"  ⚠️ 上传失败 ({e})，后续 master 将不带 character 参考图")
                 char_ref_url = None
+    else:
+        print(f"\nℹ️  未启用 character_reference（默认纯文生图）。"
+              f"如需角色锁，加 --character-ref 或 --character-ref-image <path>")
 
     # —— Step 2: 每句生成 master + 切三层 ——
     scenes = []
@@ -512,6 +557,7 @@ def main():
         prompt = build_master_prompt(
             text=text, caption=caption, visual_direction=visual_direction,
             character_lock=args.character_lock, text_mode_image2=(args.text_mode == "image2"),
+            has_character_ref=use_character_ref,
         )
         (prompt_dir / f"{sid}_master.txt").write_text(prompt + "\n", encoding="utf-8")
 
