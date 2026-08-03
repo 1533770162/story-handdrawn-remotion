@@ -11,10 +11,15 @@ description: 用 Remotion 制作「手绘日记漫画风」故事视频：白底
 
 **工具链**：agnes（Agnes Image 2.1 Flash，默认且当前免费） / apiz CLI（`fal-ai/nano-banana-2`，付费可选）+ ffmpeg（master 切三层 + caption 自动检测）+ MiniMax T2A v2（默认旁白） / edge-tts（免费可选）+ Remotion（React 控揭示/翻页/渲染）。
 
+**质量原则（70% 即交付）**：单张 master 图达到 70% 标准就直接进下一阶段，不要逐场修污染、不要全量重画、不要写 `_fix_pollution` 脚本。配旁白、字幕、擦除动画后整体观感合格即可。目标是几小时内出片，不是每张图都完美。
+
+**默认纯文生图**：`gen_story_images.py` 默认**不生成** character_reference、不使用图生图（实测 character_reference 会被 agnes 当成「角色立绘贴纸」污染每场）。只有用户显式要求角色锁或提供参考图时，才加 `--character-ref`（自动生成 00）或 `--character-ref-image <path>`（用用户提供的图）。
+
+**preview 即成片**：`npm run render:preview`（720×960）产出的 MP4 就是默认交付物。**不要自动跑 `npm run render`（1080×1440）**，除非用户明确说"要高清 / 要 1080p / 要最终版"。1080p 渲染耗时长，preview 在手机/电脑上看已经足够。
+
 **规范样板**：
 - `<VIDEO_WORKSPACE>/handdrawn-story-ep01/` — 第一集成品工程（apiz + image2）
 - `<VIDEO_WORKSPACE>/yueyanglou-ji/` — agnes + font 模式，免费全流程
-- `<VIDEO_WORKSPACE>/mayflower-story/` — **训练先验污染修复范例**（v3 玩法，任何题材通用）
 
 遇到排版、节奏、prompt 拿不准的时候，先看它们的 `storyboard.json` 和 `prompts/` 下的 master prompt 留底。
 
@@ -118,20 +123,27 @@ cd "<VIDEO_WORKSPACE>/<项目名>" && npm install
 ```bash
 python scripts/gen_story_images.py examples/story.txt \
   --title "世上最美味的泡面" \
-  --character-lock "固定两位主角：父亲约35岁..." \
   --visual-plan visual_plan.json \
   --transition cut
 # --backend 默认 agnes，--text-mode 默认按后端自动选（agnes→font / apiz→image2）
+# 默认纯文生图，不生成 character_reference（避免角色立绘污染）
+```
+
+需要角色锁时（用户明确要求或提供了参考图）才加：
+```bash
+# 自动生成 00_character_reference.png 并走图生图
+python scripts/gen_story_images.py story.txt --character-ref
+# 或用用户提供的参考图
+python scripts/gen_story_images.py story.txt --character-ref-image ./my-ref.png
 ```
 
 脚本流程：
 1. 校验 `references/style-bw.png` + `style-color.png` 存在
 2. 分句 + formatCaption + durationFor 估时
-3. 生成 `00_character_reference.png`（角色身份锚点）
-4. 后端为 apiz 时：`apiz upload` 上传 character_reference 到 CDN；后端为 agnes 时：跳过上传，后续 master 走 data URI 图生图
-5. 每句生成 master（用 character_reference 锁身份：apiz 用 image_url，agnes 用 extra_body.image data URI）
-6. ffmpeg 切三层：text_image / bw / color（font 模式下 text_image 不切，由 Remotion TextWipe 实时渲染字幕）
-7. 写 `storyboard.json`（含 `narration` 字段供 TTS 用）
+3. 默认纯文生图（无 character_reference）；只有加 `--character-ref` / `--character-ref-image` 才生成/使用角色参考
+4. 每句生成 master
+5. ffmpeg 切三层：text_image / bw / color（font 模式下 text_image 不切，由 Remotion TextWipe 实时渲染字幕）
+6. 写 `storyboard.json`（含 `narration` 字段供 TTS 用）
 
 **dry-run 先看 prompt**：
 ```bash
@@ -193,16 +205,18 @@ npm run dev
 - character 一致性（同一个人的脸/服装跨场景一致）
 - 横向揭示方向一致（text/bw/color 都从左到右）
 
-### 10. 预览（720×960）→ 必须等用户确认
+### 10. 渲染 preview（720×960）= 默认成片
 
 ```bash
 npm run render:preview
 # → out/picture_silent-preview.mp4
 ```
 
-**⚠️ 这一关必须停下来问用户**（沿用 stop-at-preview 项目规则）。预览通过后才进最终渲染。
+**⚠️ `picture_silent-preview.mp4` 就是默认交付物**。走完 TTS + apply_timeline 后直接渲 preview，把它交给用户即可。**不要自动跑 1080p 最终渲染**。
 
-### 11. 最终渲染（1080×1440）+ ffprobe 验收
+只有用户明确说"要高清 / 要 1080p / 要最终版 / 出高清"时才进第 11 步。
+
+### 11.（可选）1080p 高清版 — 仅在用户明确要求时
 
 ```bash
 npm run render
@@ -210,6 +224,8 @@ npm run render
 
 ffprobe -v error -show_streams -show_format out/picture_silent.mp4
 ```
+
+1080p 渲染 2000+ 帧耗时长，preview 在手机/电脑上看已经足够清晰，不要主动跑。
 
 ## 故事忠实度
 
@@ -238,24 +254,19 @@ ffprobe -v error -show_streams -show_format out/picture_silent.mp4
 | 输出 | H.264 MP4，默认含旁白音轨 |
 | safe border | 至少 10% 左右、8% 上下，所有笔触不触边 |
 
-## 角色档案（character_lock 落地表）
+## 角色一致性（默认关闭）
 
-### 写法
+**默认纯文生图**：不加 `--character-ref`，不生成 `00_character_reference.png`，不传图生图参考。视觉规划靠 `visual_plan.json` 里每句的构图描述 + `--character-lock` 里的服装规则。实测这样出片最快，70% 质量足够。
 
-`--character-lock` 参数给一个完整描述，**所有跨场出现的角色**都要写明：年龄、发型、脸型、上装颜色+款式、下装、鞋、特殊标记。
+**需要角色锁时**（用户明确要求同一张脸跨场一致，或提供了参考图）：
+```bash
+# 自动生成 00 角色锚点
+python scripts/gen_story_images.py story.txt --character-ref --character-lock "..."
+# 或用用户提供的参考图
+python scripts/gen_story_images.py story.txt --character-ref-image ./ref.png
+```
 
-### Narrative Isolation 规则（自动追加）
-
-每场 master prompt 末尾会自动加 narrative isolation 段（见 `references/prompt-recipes.md`），强制 apiz：
-- 只画当前句明确提到的人
-- 不把前一场的角色"脑补"到下一场
-- 不提前画后文才出现的角色
-
-### character_reference.png（00）
-
-第一场前会先生成 `00_character_reference.png`（角色身份锚点），上传到 apiz CDN，所有后续 master 用 `image_url` 引用它，nano-banana-2 进入图生图模式锁定身份。
-
-**不要用 `--no-character-ref`**（除非测试 prompt），否则主角每场长出不同的脸。
+`--character-lock` 写服装规则即可（年龄/服装颜色/标志道具），不要写长串负面禁止词——模型会被负面词触发反而画出你禁止的东西。
 
 ## 场景语法版式约定
 
@@ -350,17 +361,17 @@ python apply_timeline.py --use-playback
 
 ## 验收清单（渲染前必过）
 
-- [ ] **故事完整**：beat checklist 全打勾，没有压成提纲
+技术项（必须过）：
 - [ ] **句长合规**：每句 ≤ 36 字（超长会被 `splitLongBeat` 切坏）
 - [ ] **caption 不超 3 行**：`formatCaption` 抛错前提前检查
-- [ ] **字幕未被截断**：抽帧检查 2 行字幕场景，第 2 行底部完整可见（参考「常见坑 - 第 2 行字幕被切」）
-- [ ] **safe border 10%**：所有笔触不出边（用 Remotion Studio 逐场检查）
-- [ ] **character 一致**：同一主角的脸/服装跨场一致（没 `--no-character-ref`）
-- [ ] **横向揭示方向一致**：text/bw/color 都从左到右（不要混方向）
 - [ ] **narration_audio 已挂载**：每场 Scene 有 `<Audio>`，`audio.voiceover='active'`
 - [ ] **duration_sec 已回写**：用 timeline.json 真实时长，不是估时
-- [ ] **ffprobe 抽帧**：每场渲接近结尾的静帧，肉眼检查排版
-- [ ] **训练先验污染抽检（建议但非阻塞）**：master 生成后可选用 `analyze_image` MCP 抽检，把污染情况告诉用户由其判断是否需要重生成。**污染不阻塞 preview**——用户更想看片，可以让视频先出，问题场事后再修。详见 `references/prompt-recipes.md` 第十一节。
+- [ ] **ffprobe 检查**：mp4 video/audio duration 一致
+
+质量项（70% 即可，不要逐场修）：
+- 故事连贯、字幕不截断、横向揭示方向一致
+- 图片有污染/角色重复/构图不完美——**不阻塞出片**，配旁白和动画后整体能看就行
+- 只有某张图严重到无法观看（全黑/全白/明显错内容）才重画那一张，不要全量重画
 
 ## 静帧查看策略（重要）
 
