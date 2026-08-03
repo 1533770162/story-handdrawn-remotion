@@ -61,6 +61,8 @@ agnes key免费申请地址： https://agnes-ai.com/
 
 ## Demo视频演示
 
+https://www.bilibili.com/video/BV1a23Z6jEkn/?vd_source=86926e418c83af75f6850b5546388a79
+
 https://www.bilibili.com/video/BV1un3X6fEDk/?vd_source=86926e418c83af75f6850b5546388a79
 
 ## 感谢
