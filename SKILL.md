@@ -1,6 +1,6 @@
 ---
 name: story-handdrawn-remotion
-description: 用 Remotion 制作「手绘日记漫画风」故事视频：白底 + 黑色记号笔轮廓 + 蜡笔色，每句故事被画三次（文字→黑白画稿→彩色插画）横向擦除揭示，可选右下角卷页翻书转场，默认 MiniMax 旁白。当用户要把一段中文故事文案、生活日记、儿童绘本、教学小品变成竖屏手绘风视频，或把一组有序的手绘图片变成翻书动画时，必须使用这个 skill。触发词：手绘日记视频、日记漫画、故事变视频、手写字幕、擦除揭示、翻书效果、蜡笔色、paper diary comic、手绘故事、3:4 竖屏故事。
+description: 用 Remotion 制作「手绘日记漫画风」故事视频：白底 + 黑色记号笔轮廓 + 蜡笔色，每句故事被画三次（文字→黑白画稿→彩色插画）横向擦除揭示，可选右下角卷页翻书转场，默认 MiniMax 旁白。当用户要把一段中文故事文案、生活日记、儿童绘本、教学小品变成竖屏手绘风视频，或把一组有序的手绘图片变成翻书动画时，必须使用这个 skill。也支持英文教学模式（--lang en）：生成 Oxford 课本风格的教育闪卡图片（句子+关键词音标+插画烧在同一张图上），用于中小学英语教学。触发词：手绘日记视频、日记漫画、故事变视频、手写字幕、擦除揭示、翻书效果、蜡笔色、paper diary comic、手绘故事、3:4 竖屏故事、英文故事、英语教学视频、English story、educational flashcard、英语闪卡。
 ---
 
 # Story Handdrawn Remotion（手绘日记风故事视频）
@@ -12,6 +12,8 @@ description: 用 Remotion 制作「手绘日记漫画风」故事视频：白底
 **工具链**：agnes（Agnes Image 2.1 Flash，默认且当前免费，4 路并发生成） / apiz CLI（`fal-ai/nano-banana-2`，付费可选）+ ffmpeg（master 切三层 + caption 自动检测）+ edge-tts（默认免费旁白） / MiniMax T2A v2（高质量可选）+ Remotion（React 控揭示/翻页/渲染）。
 
 **质量原则（70% 即交付）**：单张 master 图达到 70% 标准就直接进下一阶段，不要逐场修污染、不要全量重画、不要写 `_fix_pollution` 脚本。配旁白、字幕、擦除动画后整体观感合格即可。目标是几小时内出片，不是每张图都完美。
+
+**付费图片不许重跑（硬规则）**：apiz nano-banana-2 约 0.32 元/张，16 场≈5 元/轮。**不要**为了"看看 prompt 改了会不会更好"而 `rm -rf public/assets/generated/<hash>/` 重跑，也不要逐张 Read 检查然后重画"稍微不完美"的图。脚本默认 skip 已存在的 master，这是省钱的关键——信任它。改 prompt 模板/代码不会让旧资产重新计费（资产 hash 只取决于 story 文本 + args）。只有某张图**真的无法观看**（全黑/全白/画错主题）才删那一张 `<sid>_master.png` 单跑，其余场次会自动跳过。英文教学（`--lang en`）直接用 `--backend apiz`，别先烧一轮 agnes 试——agnes 画的英文/音标是乱码，不可用。
 
 **默认纯文生图**：`gen_story_images.py` 默认**不生成** character_reference、不使用图生图（实测 character_reference 会被 agnes 当成「角色立绘贴纸」污染每场）。只有用户显式要求角色锁或提供参考图时，才加 `--character-ref`（自动生成 00）或 `--character-ref-image <path>`（用用户提供的图）。
 
@@ -99,12 +101,17 @@ cd "<VIDEO_WORKSPACE>/<项目名>" && npm install
 - `public/assets/generated/` — apiz 产出的 master 占位
 - `references/style-bw.png` + `style-color.png` — 风格锚点参考图（**必备**，缺了脚本会 hard fail）
 
-### 5. 选输入模式 + 选后端 + 选转场
+### 5. 选输入模式 + 选后端 + 选转场 + 选语言
 
 | 输入 | 命令 |
 |---|---|
 | 故事文本（默认） | `python scripts/gen_story_images.py examples/story.txt --title "..."` |
+| 英文教学故事 | `python scripts/gen_story_images.py examples/story_en.txt --lang en --title "..."` |
 | 上传图片 | `node scripts/import_uploaded_pages.mjs --image 01.jpg --image 02.jpg --title "..."` |
+
+语言模式（`--lang`）：
+- `zh`（默认）：中文手绘日记漫画风，MaShanZheng 字体字幕，agnes 免费 + font 模式
+- `en`：英文教学闪卡风（Oxford 课本风），**两段式**：顶部带只画英文句子，下方插画 + 关键词音标作为小字叠在插画左下角，用于英语教学。详见下方「英文教学模式」
 
 后端选项（`--backend`）：
 - `agnes`（默认，Agnes Image 2.1 Flash，当前 $0/张免费，高密度中文手绘风）
@@ -254,6 +261,8 @@ ffprobe -v error -show_streams -show_format out/picture_silent.mp4
 | 输出 | H.264 MP4，默认含旁白音轨 |
 | safe border | 至少 10% 左右、8% 上下，所有笔触不触边 |
 
+> **英文模式（`--lang en`）差异**：风格锁切到 `STYLE_LOCK_EN`（Oxford 课本教育闪卡风，非手绘日记漫画）；字幕模式强制 image2（两段式：顶部带只画句子，关键词+IPA 作为小字叠在下方插画左下角）；配音默认 `en-US-JennyNeural`；估时按词数。详见下方「英文教学模式」。
+
 ## 角色一致性（默认关闭）
 
 **默认纯文生图**：不加 `--character-ref`，不生成 `00_character_reference.png`，不传图生图参考。视觉规划靠 `visual_plan.json` 里每句的构图描述 + `--character-lock` 里的服装规则。实测这样出片最快，70% 质量足够。
@@ -272,11 +281,13 @@ python scripts/gen_story_images.py story.txt --character-ref-image ./ref.png
 
 ### 1. 标题场景（两种模式）
 
-**image2 模式**（仅 apiz 后端可用，需要图片模型在画板上画手写体字幕）：
+**image2 模式（中文）**（apiz 后端用，需要图片模型在画板上画手写体字幕）：
 - 上半 y=0–510：手写体字幕（apiz 在 master 上画，ffmpeg 切出 text_image 层）
 - 下半 y=512–1536：彩色插画（1024×1024 正方形）
 - y=510–512：极窄过渡带（2px，实际几乎不可见）
 - 字幕区给到 510px 是因为 nano-banana-2 中文字号偏大，2-3 行字幕实际会画到 y=460-500
+
+**image2 模式（英文 `--lang en`）走两段式分区，但顶部带只放句子**：顶部 y≈0-510 切出 text 层（只有英文句子），下方 y≈512-1536 切出 bw/color 方形插画（插画上叠加小字关键词+IPA）。ffmpeg 仍在 y≈512 做水平裁切，但切线上方只有纯白底+句子（没有 IPA 行），不会被截断。详见下方「英文教学模式」。
 
 **font 模式**（agnes 默认，apiz 也可用）：
 - 整张 master 1024×1536 全是彩色插画（agnes 不会画中文，所以不在画板上留字幕区）
@@ -399,7 +410,9 @@ python -c "from PIL import Image; Image.open('out/check-s1.png').convert('RGB').
 - **nano-banana-2 不支持 portrait_4_3** → fallback 到 `square_hd` + ffmpeg pad。`gen_story_images.py` 已用 portrait_4_3，若 apiz 报错，改 `image_size` 参数。
 - **不要停留在无配音估时版**（`audio.voiceover='pending'`）——真实 TTS 生成后必须 `apply_timeline.py` 回写一版。
 - **不要因为追求短而删故事连接段**——场数可增加（10→12→15），连贯性优先。
-- **apiz 余额不足** → `apiz auth status` 检查；图片生成失败时无法 fallback（不像 TTS 有直连兜底），需充值或换模型。
+- **apiz 余额不足** → 脚本启动时会自动 `apiz account balance --json` 预检（<10 元直接退出，不烧一轮 429）。也可手动 `apiz account balance` 查。图片生成失败无法 fallback（不像 TTS 有直连兜底），需充值或换 agnes（仅限中文）。
+- **并发静默失败（已修）** → 旧版 `list(as_completed([...]))` 从不调 `.result()`，apiz 429/网络错时 16 个线程全抛异常但主流程假装成功，继续写空 storyboard。已改成 try/except 收集失败场次并 `SystemExit`，且生成后校验文件 >1KB。改并发逻辑时务必保留 `.result()` 调用和文件校验。
+- **prompt 里写像素坐标/百分比会被画到图上** → nano-banana-2 会把 prompt 里的 `y=510`、`1024×1024`、`10%`、`48-pixel` 当文字 literally 画在卡片边缘。所有生图 prompt 必须用相对描述（"top third"、"bottom two-thirds"、"generous margins"），不能给数字坐标。改 prompt 模板时别重新引入。
 - **要高质量配音** → `gen_tts.py --backend minimax`（默认是免费 edge-tts）。
 - **音频混合失败（audio-mixing 目录缺失）** → 根因是并发渲染竞争 Windows temp。模板已设 `Config.setConcurrency(1)`。⚠️ **绝对不要同时跑多个 `remotion render`**。
 - **第 2 行字幕被切** → 历史 bug：原来 `CAPTION_CROP_HEIGHT=342` 太小，nano-banana-2 中文字号偏大实际画到 y=460-500。已修：crop 高度 342→510、scale 1536:765、TextWipe 容器 height 288→420 / top 86→50、LayerWipe top 382→488。**4 处必须同步改**（`gen_story_images.py` 的 CAPTION_CROP_HEIGHT + scale + TextWipe.tsx 容器 + LayerWipe.tsx 容器）。如果只动 crop 不动容器，文字会被压扁。
@@ -430,3 +443,105 @@ python -c "from PIL import Image; Image.open('out/check-s1.png').convert('RGB').
 - 数学/几何证明（用 geometry-math-proof-remotion）
 
 真正让手绘日记风有韵味的，不是单张图多漂亮，而是「一句话被画出三次」的节奏 + 「文字先于声音出现」的视觉铺垫。
+
+## 英文教学模式（`--lang en`，英语教学专用）
+
+当用户要**做英文故事用于英语教学**时，加 `--lang en`。此模式下所有文案、图片生成、旁白都按英文，生图风格从「手绘日记漫画」切换到「Oxford 英语课本教育闪卡」。
+
+### 核心区别
+
+| 项 | `--lang zh`（默认） | `--lang en` |
+|---|---|---|
+| 风格 | 手绘日记漫画（蜡笔色 + 记号笔轮廓） | Oxford 英语课本闪卡（清爽教育插画风） |
+| 图片内容 | 纯插画（字幕由 Remotion 渲染） | **两段式：顶部只有句子，下方插画 + 关键词音标小字叠在插画左下角** |
+| 字幕模式 | font（MaShanZheng，agnes 不画中文） | image2（顶部句子切独立 text 层，下方插画切 bw/color） |
+| 关键词 | 无 | 每句自动提取 2-4 个重点词汇，带 IPA 音标（叠在插画上） |
+| 旁白语音 | `zh-CN-XiaoyiNeural` | `en-US-JennyNeural` |
+| 估时公式 | 按字数 | 按词数（英文朗读更慢，时间更长） |
+
+### 两段式布局（重点）
+
+英文闪卡仍然是**上下两段**，但顶部带的「字幕」只有句子本身，**关键词和 IPA 音标不再画在顶部带**——它们作为**小字体叠在下方插画的左下角**：
+
+```
+┌─────────────────────────┐
+│  Sentence at top        │ ← 顶部带：只有英文句子（大字）
+│  (large black font)     │
+├─────────────────────────┤
+│                         │
+│       illustration      │ ← 下方方形插画
+│                         │
+│  keyword1 /kənˈtest/    │ ← 关键词+IPA：小字叠在插画左下角
+│  keyword2 /ˈneɪbl/      │
+└─────────────────────────┘
+```
+
+**为什么这样布局**：
+- 顶部带只放句子 → ffmpeg 在 y≈512 水平裁切时，切线上方是纯白底+英文字符，没有 IPA 行会被截断
+- IPA 作为小标注叠在插画左下角 → 不抢插画主体的视觉重量，但学生仍能看到发音
+- 顶部句子带由 Remotion TextWipe 第 0 帧揭示 → 每场开头立即显示句子，不会全白等待
+
+**给 apiz/nano-banana-2 的 prompt 关键约束**（见 `gen_story_images.py` 的 `build_english_flashcard_prompt`）：
+- 顶部带：ONLY 句子，NO keywords，NO phonetics
+- 下方方形插画：用插画填满
+- 关键词+IPA：作为 SMALL labels 叠在插画左下角，左对齐竖排堆叠，clearly secondary to the picture
+- 插画左下角保持干净明亮（天空/墙壁/白纸）以保证小音标可读
+- 不要画水平分隔线、面板边框
+- 不要在 prompt 里写像素坐标（`y=510`）或百分比（`10%`）—— nano-banana-2 会把这些数字 literally 画到图上
+
+### 后端选择（两个都可以，按预算和质量要求挑）
+
+- **`--backend apiz`（推荐）**：nano-banana-2 文字渲染更稳，句子+IPA 拼写正确率更高。付费（约 0.32 元/张，16 场≈5 元）。
+- `--backend agnes`（默认，免费）：agnes + image2 有已知问题——可能把插画范围画得太大覆盖句子带，英文/音标也可能拼错（实测出现过 `keywiods`、`compfur-cartan` 这类乱码）。脚本能跑通，**接受 70% 文字质量即可，不要逐张修**；如果对教学可读性要求高，换 apiz。
+
+```bash
+# 推荐：apiz 后端，文字渲染最稳
+python scripts/gen_story_images.py examples/story_en.txt --lang en --backend apiz --title "English Story"
+
+# 免费：agnes 后端（文字可能不完美，70% 即可）
+python scripts/gen_story_images.py examples/story_en.txt --lang en --title "English Story"
+
+# dry-run 先看 prompt（不烧钱）
+python scripts/gen_story_images.py examples/story_en.txt --lang en --dry-run
+```
+
+> nano-banana-2 有时返回 416×624 的小图，脚本会自动 lanczos 放大到 1024×1536。画面会偏软但完全可用——不要为此换更贵的模型或重跑，70% 原则。
+
+### 英文故事写作规范
+
+- 一句一拍，英文按 `. ! ? ;` 切句（中文按 `。！？；`）
+- 单句 ≤ 120 字符（softLimit），超长按逗号/连接词切
+- 自然段用空行分隔
+- 每句配一张闪卡 = 一个画面
+
+### TTS 配音
+
+narration.yaml 加 `lang: en`，voice 自动切英文：
+
+```yaml
+lang: en
+voice: en-US-JennyNeural   # edge 默认女声；男声用 en-US-GuyNeural
+speed: 0.95                 # 教学可稍慢
+scenes:
+  - id: s01
+    text: "The little rabbit hopped through the green meadow."
+  - id: s02
+    text: "..."
+```
+
+### 三层揭示的教学意义
+
+英文闪卡仍然走「文字 → 黑白 → 彩色」三阶段横向擦除，和中文模式对齐：
+1. **文字层**（text_image，顶部句子带）：第 0 帧揭示 → 学生先看到完整句子，可以跟读
+2. **黑白层**（bw，下方方形插画）：从左到右擦入线稿 + 插画左下角的关键词音标 → 学发音、理解词义
+3. **彩色层**（color）：从左到右擦入完整彩色插画 → 视觉记忆
+
+顶部句子带在第 0 帧出现，所以每场开头立即显示句子，**不会全白等待**——这是把音标从顶部带挪到插画上的关键收益。
+
+### 常见坑（英文模式）
+
+- **agnes + image2 文字质量不稳定** → agnes 可能把插画范围画得太大挤掉顶部句子带，英文/音标也可能拼错（`keywiods`、`compfur-cartan`）。对教学可读性要求高就用 `--backend apiz`；能接受 70% 就用免费 agnes 直接出片，不要逐张修。
+- **Quiz/Answer 闪卡要手动清空关键词** → `extract_keywords()` 会从 "Quiz: Who did AlphaGo beat?" 里抽出 `Quiz / AlphaGo / beat` 这种没教学意义的词。在 `visual_plan.json` 里给问句和答句场次显式设 `"keywords": []`。
+- **IPA 音标渲染** → nano-banana-2 对大部分 IPA 符号渲染清楚，个别符号可能不完美。按 70% 原则接受；只有严重到看不懂才在 `visual_plan.json` 里把该场 `"keywords": []` 只留句子。
+- **英文分句切太碎** → `split_story_en` 按 `. ! ? ;` 切，超长句按逗号/连接词再切。如切坏节奏，手动在 story.txt 里调整句号位置。
+- **估时太长** → `duration_for_en` 按词数给时间（英文比中文慢）。配音后 `apply_timeline.py` 会用音频真实时长覆盖估时。

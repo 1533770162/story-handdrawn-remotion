@@ -10,7 +10,8 @@
     仅在用户明确要高质量时用。
 
 输入 narration.yaml（id 用 s01/s02 字符串，避免 YAML 把 01 当八进制）：
-  voice: zh-CN-XiaoyiNeural   # edge 默认；minimax 用 female-shaonv
+  lang: zh                    # 可选：en 时默认 voice 切 en-US-JennyNeural（英文教学）
+  voice: zh-CN-XiaoyiNeural   # edge 默认；minimax 用 female-shaonv；英文用 en-US-JennyNeural
   speed: 1.0
   scenes:
     - id: s01
@@ -101,6 +102,7 @@ def call_tts_direct(
 # ============================================================================
 
 EDGE_DEFAULT_VOICE = "zh-CN-XiaoyiNeural"  # 女声清亮；男声可用 zh-CN-YunxiNeural
+EDGE_DEFAULT_VOICE_EN = "en-US-JennyNeural"  # 英文教学默认女声；男声可用 en-US-GuyNeural
 
 
 def call_tts_edge(
@@ -200,8 +202,13 @@ def main():
     args = parser.parse_args()
 
     spec = load_narration(Path(args.narration_yaml))
-    # edge 模式默认 voice 不同；用户在 yaml 显式写 voice 优先
-    default_voice = EDGE_DEFAULT_VOICE if args.backend == "edge" else "female-shaonv"
+    # voice 选择优先级：yaml 显式 voice > yaml lang 字段 > backend 默认
+    # 英文教学故事（lang: en）默认用 en-US-JennyNeural
+    yaml_lang = spec.get("lang", "zh")
+    if args.backend == "edge":
+        default_voice = EDGE_DEFAULT_VOICE_EN if yaml_lang == "en" else EDGE_DEFAULT_VOICE
+    else:
+        default_voice = "female-shaonv"  # minimax 中文女声
     voice = spec.get("voice", default_voice)
     speed = float(spec.get("speed", 1.0))
     scenes = spec["scenes"]

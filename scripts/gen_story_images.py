@@ -32,6 +32,7 @@ from lib_apiz import generate_image as apiz_generate_image, upload as apiz_uploa
 from lib_agnes import generate_image as agnes_generate_image, DEFAULT_MODEL as AGNES_DEFAULT_MODEL  # noqa: E402
 
 DEFAULT_BACKEND = "agnes"
+DEFAULT_LANG = "zh"
 
 # ============================================================================
 # 风格锁定字符串（直接照抄 story-to-video.mjs）
@@ -44,7 +45,31 @@ STYLE_LOCK = (
     "selective muted wax-crayon color only, no realistic shading, no paper texture, no watermark"
 )
 
+# 英文教学模式风格锁：中小学英语课本风，非手绘日记漫画风
+STYLE_LOCK_EN = (
+    "clean English textbook illustration for middle school students, "
+    "pure white background, clear readable black text, simple colorful flat illustration, "
+    "educational flashcard layout like Oxford English textbook, "
+    "soft bright educational colors, no realistic shading, no paper texture, no watermark"
+)
+
 DEFAULT_CHARACTER_LOCK = ""
+
+# 英文关键词提取用的停用词表（用于从句子里挑出重点教学词汇）
+ENGLISH_STOP_WORDS = frozenset({
+    "the","a","an","is","are","was","were","be","been","being","am","do","does",
+    "did","have","has","had","will","would","can","could","should","shall","may",
+    "might","must","to","of","in","on","at","for","with","by","from","as","into",
+    "about","than","then","so","very","too","and","but","or","if","because","when",
+    "while","where","what","who","whom","which","how","why","this","that","these",
+    "those","i","you","he","she","it","we","they","my","your","his","her","its",
+    "our","their","me","him","us","them","not","no","yes","just","also","only",
+    "there","here","up","down","out","over","again","once","all","any","some","one",
+    "two","more","most","other","such","own","same","few","further","off","now",
+    "get","got","go","goes","went","gone","come","came","say","said","make","made",
+    "see","saw","know","knew","think","thought","let","like","want","well","back",
+    "even","still","yet","ever","never","always","often","every","much","many",
+})
 
 # ============================================================================
 # 分句算法（直接照抄 story-to-video.mjs 的 splitStory / splitLongBeat / formatCaption）
@@ -152,6 +177,141 @@ def duration_for(caption: str) -> float:
 
 
 # ============================================================================
+# 英文教学模式：英文分句 / 字幕格式化 / 关键词提取 / 估时
+# ============================================================================
+
+EN_TERMINAL_PUNCT = re.compile(r"[.!?;]$")
+# 英文连接词，超长句按这些词切分
+EN_TURN_SPLIT = re.compile(
+    r"\s+(?:and|but|because|so|then|when|while|after|before|although|though|"
+    r"since|unless|until|if|as|once|where|whereas)\b"
+)
+
+
+def split_long_beat_en(sentence: str, soft_limit: int = 120) -> list[str]:
+    """英文超长句切分：先按逗号/分号/连接词切，再按词数硬切。"""
+    value = sentence.strip()
+    if len(value) <= soft_limit:
+        return [value]
+
+    m = EN_TERMINAL_PUNCT.search(value)
+    ending = m.group(0) if m else ""
+    body = value[: -len(ending)] if ending else value
+    body = body.rstrip(",;: ")
+
+    # 先按逗号/分号/冒号切
+    clauses = re.split(r"(?<=[,;:])\s+", body)
+    # 再按连接词切（and/but/because/...）
+    expanded = []
+    for clause in clauses:
+        parts = EN_TURN_SPLIT.split(clause)
+        expanded.extend(parts)
+    clauses = [c.strip() for c in expanded if c.strip()]
+
+    if len(clauses) == 1:
+        # 硬切：按词数
+        words = body.split()
+        chunks = []
+        cur = []
+        cur_len = 0
+        for w in words:
+            add = len(w) + (1 if cur else 0)
+            if cur and cur_len + add > soft_limit:
+                chunks.append(" ".join(cur))
+                cur = [w]
+                cur_len = len(w)
+            else:
+                cur.append(w)
+                cur_len += add
+        if cur:
+            chunks.append(" ".join(cur))
+        result = chunks
+    else:
+        beats = []
+        current = ""
+        for clause in clauses:
+            candidate = f"{current} {clause}".strip() if current else clause
+            if current and len(candidate) > soft_limit:
+                beats.append(current.rstrip(",;:"))
+                current = clause
+            else:
+                current = candidate
+        if current:
+            beats.append(current.rstrip(",;:"))
+        result = beats
+
+    # 补尾标点
+    return [b if EN_TERMINAL_PUNCT.search(b) else f"{b}{ending or '.'}" for b in result]
+
+
+def split_story_en(text: str) -> list[str]:
+    """英文故事分句：按空行分段，每段按 . ! ? ; 切句，超长句再切。"""
+    normalized = re.sub(r"\r", "", re.sub(r"[ \t]+", " ", text)).strip()
+    paragraphs = [p.strip() for p in re.split(r"\n+", normalized) if p.strip()]
+    beats: list[str] = []
+    for para in paragraphs:
+        # 按句末标点 + 空白切句
+        sentences = re.split(r"(?<=[.!?;])\s+", para)
+        for sent in sentences:
+            sent = sent.strip()
+            if not sent:
+                continue
+            if not EN_TERMINAL_PUNCT.search(sent):
+                sent = f"{sent}."
+            beats.extend(split_long_beat_en(sent))
+    return [b for b in beats if b]
+
+
+def format_caption_en(text: str, max_chars_per_line: int = 42, max_lines: int = 3) -> str:
+    """英文字幕格式化：按词换行，保持词完整。"""
+    words = text.split()
+    lines = []
+    current = ""
+    for w in words:
+        candidate = f"{current} {w}".strip() if current else w
+        if len(candidate) > max_chars_per_line and current:
+            lines.append(current)
+            current = w
+        else:
+            current = candidate
+    if current:
+        lines.append(current)
+    if len(lines) > max_lines:
+        raise ValueError(
+            f"Caption needs {len(lines)} lines (> {max_lines}); split story beat before rendering"
+        )
+    return "\n".join(lines)
+
+
+def extract_keywords(sentence: str, max_n: int = 4) -> list[str]:
+    """从英文句子里提取重点教学词汇（过滤停用词，按出现顺序去重）。
+
+    用于在生图 prompt 里要求模型把关键词 + 音标注在图片上。
+    """
+    words = re.findall(r"[A-Za-z][A-Za-z'-]*", sentence)
+    seen: set[str] = set()
+    result: list[str] = []
+    for w in words:
+        lw = w.lower()
+        if lw in ENGLISH_STOP_WORDS or len(w) < 3:
+            continue
+        if lw in seen:
+            continue
+        seen.add(lw)
+        result.append(w)
+        if len(result) >= max_n:
+            break
+    return result
+
+
+def duration_for_en(caption: str) -> float:
+    """英文估时：英文朗读比中文慢，按词数给更多时间。"""
+    line_count = caption.count("\n") + 1
+    word_count = len(caption.split())
+    return round(min(8.5, max(4.4, 3.0 + line_count * 0.6 + word_count * 0.28)), 1)
+
+
+# ============================================================================
 # apiz upload + 切三层（移植 import-codex-images.mjs 的 ffmpeg filter）
 # ============================================================================
 
@@ -226,6 +386,15 @@ def _normalize_master(master_path: Path, project_root: Path, text_mode_image2: b
         return master_path
     if w == 0 or h == 0:
         return master_path  # 探测失败，让下游 ffmpeg 自己报错
+    # Log when upstream returned a smaller image. nano-banana-2 sometimes gives
+    # 416×624 which upscales soft — but per the 70% rule this is acceptable and
+    # must NOT prompt a rerun or a model switch. Just note it once.
+    scale = max(target_w / max(w, 1), target_h / max(h, 1))
+    if scale >= 1.5:
+        print(
+            f"  ℹ️ {master_path.name} 上游返回 {w}×{h}，自动放大到 {target_w}×{target_h}（偏软但可用，不需重跑）",
+            file=sys.stderr,
+        )
     tmp = master_path.with_suffix(".normalized.png")
     subprocess.run(
         ["ffmpeg", "-hide_banner", "-loglevel", "error",
@@ -246,12 +415,19 @@ def split_master_into_layers(
     scene_id: str,
     project_root: Path,
     text_mode_image2: bool,
-) -> dict[str, str]:
-    """把一张 master 切成 text/bw/color 三层。返回相对路径（用于 storyboard）。"""
+) -> dict[str, str | None]:
+    """把一张 master 切成 text/bw/color 三层。返回相对路径（用于 storyboard）。
+
+    image2 模式（含英文教学闪卡）：顶部切出 text_image（句子带），下方 1024×1024
+    方形切 bw/color（插画区域，英文模式下音标作为小标注叠在这张图内）。font
+    模式：不切 text_image，整张 master 出 bw/color。
+    """
     _normalize_master(master_path, project_root, text_mode_image2)
     text_path = asset_dir / f"{scene_id}_text.png"
     bw_path = asset_dir / f"{scene_id}_bw.png"
     color_path = asset_dir / f"{scene_id}_color.png"
+
+    rel = lambda p: f"assets/{p.relative_to(project_root / 'public' / 'assets').as_posix()}"
 
     if text_mode_image2:
         caption_y = detect_caption_crop_y(master_path, project_root)
@@ -273,7 +449,6 @@ def split_master_into_layers(
     color_filter = "crop=1024:1024:0:512" if text_mode_image2 else "null"
     ffmpeg_run(master_path, color_filter, color_path, project_root)
 
-    rel = lambda p: f"assets/{p.relative_to(project_root / 'public' / 'assets').as_posix()}"
     return {
         "text_image": rel(text_path) if text_mode_image2 else None,
         "bw": rel(bw_path),
@@ -293,7 +468,7 @@ Input images: the supplied black-and-white and color frames are style references
 Primary request: draw ONLY the recurring protagonists described below. Show each protagonist in two simple full-body poses, front view and three-quarter view, arranged side by side.
 Character lock: {character_lock}
 Style: {STYLE_LOCK}
-Composition: pure white square canvas, all uncropped full-body poses centered with generous spacing and a clean 10% safe border. No scenery, furniture, extra people, props or decorative marks.
+Composition: pure white square canvas, all uncropped full-body poses centered with generous spacing and a clean white margin around all edges. No scenery, furniture, extra people, props or decorative marks.
 Color: selective muted wax-crayon color only. Follow the clothing colors in the character lock, use black scribbles for hair and dark trousers, and leave skin and most of the canvas white.
 Constraints: this is an identity reference only; no text, letters, numbers, labels, captions, speech bubbles, logo, signature or watermark; no realistic shading, gradients or vector cleanliness.""".strip()
 
@@ -306,23 +481,29 @@ def build_master_prompt(
     text_mode_image2: bool,
     has_character_ref: bool = False,
 ) -> str:
-    master_size = "1024x1536" if text_mode_image2 else "1024x1024"
+    # NOTE: do NOT put pixel coordinates (y=510), dimensions (1024x1024), or
+    # percentages (10%) in the prompt — nano-banana-2 has been observed drawing
+    # those numbers onto the card as visible text. The ffmpeg crop auto-detects
+    # the text/illustration boundary, so relative layout descriptions suffice.
+    master_shape = "tall portrait (top caption + bottom illustration)" if text_mode_image2 else "square canvas"
     if text_mode_image2:
         caption_panel = (
-            f'Top copy panel (pixels y=0–510): pure white background. Write ONLY this '
-            f'Simplified Chinese caption verbatim, preserving the explicit line breaks:\n'
+            f'Top copy panel (roughly the top third of the card): pure white background. '
+            f'Write ONLY this Simplified Chinese caption verbatim, preserving the explicit line breaks:\n'
             f'"{caption}"\n'
-            f'Use thick casual black felt-tip handwriting, 1–3 lines only, generous '
-            f'48-pixel left/right margins, and a large readable letter size. Do not put '
-            f'any illustration or decorative mark in this panel. Do not place text below y=510.'
+            f'Use thick casual black felt-tip handwriting, one to three lines only, generous '
+            f'left and right margins, and a large readable letter size. Do not put '
+            f'any illustration or decorative mark in this top panel. Keep all text in the top '
+            f'panel; do not write text inside the illustration area below.'
         )
         text_constraint = (
             "no extra text outside the exact top caption, no letters or numbers in the "
-            "illustration, no labels, captions, speech bubbles, logo, signature or watermark"
+            "illustration, no labels, captions, speech bubbles, logo, signature or watermark, "
+            "no stray coordinate numbers or measurement labels anywhere on the card"
         )
         illustration_panel = (
-            "Illustration panel (pixels y=512–1536): use this exact lower 1024×1024 square "
-            "for the scene. Keep the upper 510-pixel copy panel completely free of any illustration."
+            "Illustration panel (the bottom two-thirds of the card, a square area below the text): "
+            "use this area for the scene. Keep the top copy panel completely free of any illustration."
         )
     else:
         caption_panel = (
@@ -336,7 +517,7 @@ def build_master_prompt(
             "The narrative sentence below is for CONTENT REFERENCE ONLY and must not appear "
             "as written characters in the illustration"
         )
-        illustration_panel = "Use the entire 1024×1024 square for the scene."
+        illustration_panel = "Use the entire square canvas for the scene."
 
     if has_character_ref:
         input_images_line = (
@@ -385,7 +566,7 @@ def build_master_prompt(
         )
 
     return f"""Use case: illustration-story
-Asset type: one vertical production master ({master_size}) for a hand-drawn Chinese diary-comic video. This single output will be locally split into a handwritten caption plate and a color illustration plate.
+Asset type: one vertical production master ({master_shape}) for a hand-drawn Chinese diary-comic video. This single output will be locally split into a handwritten caption plate and a color illustration plate.
 {input_images_line}
 {narrative_line}
 Scene direction: {visual_direction}
@@ -394,10 +575,73 @@ Scene direction: {visual_direction}
 Style: {STYLE_LOCK}
 {caption_panel}
 {illustration_panel}
-Composition: use a comfortably wide camera view. Keep the scene in the lower-middle of its illustration square with generous white negative space. Reserve a clean white safe border of at least 10% on the left and right and 8% on the top and bottom; no visible mark should touch a canvas edge.
+Composition: use a comfortably wide camera view. Keep the scene in the lower-middle of its illustration area with generous white negative space. Leave a clean white margin around all edges so no visible mark touches the frame.
 Color: selective muted wax-crayon color only: sage green, dusty blue, warm tan, brick red and warm yellow. Keep hair, trousers and dark areas as black scribbles. Leave skin and most of the canvas pure white.
 {continuity_line}{isolation_block}
 Constraints: non-graphic, emotionally restrained family storytelling; no visible blood or injury; {text_constraint}; no graphite realism, gradients or vector cleanliness.""".strip()
+
+
+# ============================================================================
+# 英文教学模式：教育闪卡 prompt（句子 + 关键词音标 + 插画 烧在图上）
+# ============================================================================
+
+def build_english_flashcard_prompt(
+    sentence: str,
+    keywords: list[str],
+    visual_direction: str,
+) -> str:
+    """构建英文教学闪卡 master prompt。
+
+    Oxford 英语课本风格，**两段式**布局（不是满屏）：
+      - 顶部文字带：只有英文句子（大字，1-2 行），纯白背景
+      - 下方方形插画：彩色插画填满；关键词+IPA 音标以**小字体**叠在插画
+        左下角（不是单独一行，也不在顶部带里），作为画面上的小标注
+
+    这样 ffmpeg 在文字带/插画之间做水平裁切时，切线上只有纯白（句子在切
+    线之上、音标在插画区域内），不会再从音标行中间截断。顶部句子带由
+    TextWipe 第 0 帧揭示，所以每场开头不会全白等待。
+
+    生图要求：
+      - 顶部：只写句子，不要把音标/关键词放进顶部带
+      - 下方插画：关键词+音标小字号叠在插画左下角，左对齐竖排，次要于画面
+      - 左下角保持干净明亮，保证小音标可读
+      - 不要水平分隔线、面板边框
+      - Style like Oxford English textbook
+    """
+    keywords_line = ", ".join(keywords) if keywords else "(none — no keywords)"
+
+    # NOTE: do NOT put pixel coordinates (y=510), dimensions (1024x1024), or
+    # percentages (10%, 8%) in this prompt. nano-banana-2 has been observed
+    # literally drawing those numbers onto the card as visible text. Use
+    # relative layout descriptions ("top third", "bottom two-thirds"). The
+    # ffmpeg crop is post-processing, never put in the prompt.
+    return f"""Use case: educational-illustration
+Asset type: one tall portrait production master for an English teaching flashcard video. The top is locally split off as a caption plate; the bottom becomes a square illustration plate from which a grayscale sketch is derived.
+Input images: the supplied reference frames are style references only. Ignore their text and people.
+
+English textbook flashcard page for middle school students.
+
+CONTENT:
+Sentence: "{sentence}"
+Keywords (each followed by its IPA phonetic transcription): {keywords_line}
+
+LAYOUT:
+- Top copy band (roughly the top third of the card): pure white background. Write ONLY the English sentence here, in a large readable black sans-serif font, one or two lines, generous left and right margins. This top band contains NO keywords and NO phonetics.
+- Illustration area (the bottom two-thirds, a square below the sentence): fill this whole square with a simple colorful illustration.
+- Draw the keywords and their IPA phonetics as SMALL labels overlaid ON the illustration, stacked in the bottom-left corner of the illustration square. Each keyword is followed by its IPA in a small clean font. Keep them small and clearly secondary to the picture (do not make a separate text row or a caption band for them).
+- Compose the illustration so its bottom-left corner stays light and uncluttered (open sky, a plain wall, pale ground, or clean paper) so the small phonetic labels stay legible. Do not place busy details or dark shapes behind the labels.
+- Do NOT draw any horizontal dividing line or panel border between the sentence and the illustration.
+- Illustration subject: {visual_direction}
+
+DESIGN:
+- Large readable English sentence at top, small keyword/IPA labels on the picture
+- Simple colorful illustration related to sentence meaning
+- Clean educational layout, portrait orientation
+- Style like Oxford English textbook
+
+Composition: leave a clear white margin around all edges so no drawn element touches the frame edge.
+Color: soft bright educational colors — sage green, dusty blue, warm tan, brick red, warm yellow. No pure neon or fluorescent colors.
+Constraints: educational, family-friendly content; the English text and phonetic symbols MUST be clearly legible and spelled correctly; no watermark, no signature, no logo, no speech bubbles, no stray numbers or measurement labels, no panel borders or dividing lines; no realistic shading or gradients.""".strip()
 
 
 # ============================================================================
@@ -410,6 +654,48 @@ def safe_title(title: str) -> str:
     return cleaned.strip("-")[:32] or "story"
 
 
+# apiz enforces an account-level minimum balance (~10 yuan) before accepting
+# image generation jobs. Below it every call returns HTTP 429 mid-batch, which
+# used to look like 16 random failures. Query the balance once up front so the
+# user gets one clear message instead.
+APIZ_MIN_BALANCE_YUAN = 10.0
+
+
+def apiz_preflight_balance() -> None:
+    """Check apiz balance before starting a batch. Warns but does not block if
+    the CLI is missing, times out, or returns unexpected output. Fails hard
+    only when balance is unambiguously below the apiz minimum."""
+    try:
+        proc = subprocess.run(
+            ["apiz", "account", "balance", "--json"],
+            capture_output=True, text=True, timeout=15,
+            encoding="utf-8", errors="replace",
+        )
+    except FileNotFoundError:
+        print("  ⚠️ 未找到 apiz CLI，跳过余额预检查", file=sys.stderr)
+        return
+    except subprocess.TimeoutExpired:
+        print("  ⚠️ apiz 余额查询超时，跳过预检查", file=sys.stderr)
+        return
+    if proc.returncode != 0:
+        msg = (proc.stderr or proc.stdout or "").strip()[:200]
+        print(f"  ⚠️ apiz 余额查询失败（跳过）：{msg}", file=sys.stderr)
+        return
+    try:
+        data = json.loads(proc.stdout)
+        yuan = float(data.get("balance_yuan", 0))
+    except (json.JSONDecodeError, ValueError, TypeError) as e:
+        print(f"  ⚠️ apiz 余额返回解析失败（跳过）：{e}", file=sys.stderr)
+        return
+    if yuan < APIZ_MIN_BALANCE_YUAN:
+        raise SystemExit(
+            f"apiz 余额不足：当前 {yuan:.2f} 元，"
+            f"nano-banana-2 要求账户至少 {APIZ_MIN_BALANCE_YUAN:.0f} 元。\n"
+            f"  充值后重跑（脚本会跳过已成功的场次），或改用 --backend agnes（免费）。"
+        )
+    print(f"  ℹ️ apiz 余额：{yuan:.2f} 元（OK）")
+
+
 def main():
     parser = argparse.ArgumentParser(
         description="故事文本 → agnes/apiz 生成 master → ffmpeg 切三层 → storyboard.json",
@@ -418,6 +704,10 @@ def main():
     parser.add_argument(
         "--backend", choices=["agnes", "apiz"], default=DEFAULT_BACKEND,
         help=f"图片后端：agnes Agnes Image 2.1 Flash 默认且免费 / apiz fal-ai/nano-banana-2 收费",
+    )
+    parser.add_argument(
+        "--lang", choices=["zh", "en"], default=DEFAULT_LANG,
+        help="语言模式：zh 中文手绘日记风（默认）/ en 英文教学闪卡风（句子+关键词音标+插画烧在图上，用于英语教学）",
     )
     parser.add_argument("--title", default="手绘故事", help="故事标题（用于资产目录命名）")
     parser.add_argument(
@@ -465,10 +755,21 @@ def main():
     )
     args = parser.parse_args()
 
-    # text_mode 未显式指定时按后端自动选：agnes 不会画中文，必须用 font；apiz 默认 image2
+    # text_mode 未显式指定时按后端+语言自动选：
+    #   zh + agnes → font（agnes 不会画中文）
+    #   zh + apiz  → image2
+    #   en         → image2（英文教学闪卡必须由模型把句子+关键词音标画在图上）
     if args.text_mode is None:
-        args.text_mode = "font" if args.backend == "agnes" else "image2"
-        print(f"  ℹ️ --text-mode 未指定，按后端 {args.backend} 自动选 {args.text_mode}")
+        if args.lang == "en":
+            args.text_mode = "image2"
+            print(f"  ℹ️ --lang en 模式，强制 text_mode=image2（模型画教学闪卡文字）")
+            if args.backend == "agnes":
+                print(f"  ⚠️ agnes + image2 可能会把插画画满整个画布（已知问题）。")
+                print(f"     英文教学闪卡推荐用 --backend apiz（nano-banana-2 文字渲染更稳）。")
+                print(f"     如坚持用 agnes，接受 70% 文字质量即可，不要逐张修。")
+        else:
+            args.text_mode = "font" if args.backend == "agnes" else "image2"
+            print(f"  ℹ️ --text-mode 未指定，按后端 {args.backend} 自动选 {args.text_mode}")
 
     project_root = Path.cwd()
     story_path = Path(args.input).resolve()
@@ -476,7 +777,10 @@ def main():
         raise SystemExit(f"故事文件不存在: {story_path}")
 
     source_text = story_path.read_text(encoding="utf-8")
-    story_parts = split_story(source_text)
+    if args.lang == "en":
+        story_parts = split_story_en(source_text)
+    else:
+        story_parts = split_story(source_text)
     if not story_parts:
         raise SystemExit("故事文本里没找到可用句子")
 
@@ -486,7 +790,7 @@ def main():
 
     # 计算资产目录 hash（避免不同故事冲突）
     hash_input = "\n".join([
-        f"{args.backend}-v1",
+        f"{args.backend}-{args.lang}-v1",
         args.title,
         args.text_mode,
         args.transition,
@@ -514,6 +818,10 @@ def main():
     visual_plan = {}
     if args.visual_plan:
         visual_plan = json.loads(Path(args.visual_plan).read_text(encoding="utf-8"))
+
+    # apiz 余额预检查：在烧 16 张图之前确认账户有钱，避免批到一半 429。
+    if args.backend == "apiz" and not args.dry_run:
+        apiz_preflight_balance()
 
     # —— Step 1: character_reference（默认关闭，纯文生图）——
     # 只有 --character-ref（自动生成 00）或 --character-ref-image（用户提供）才开启图生图
@@ -573,60 +881,124 @@ def main():
               f"如需角色锁，加 --character-ref 或 --character-ref-image <path>")
 
     # —— Step 2: 每句生成 master + 切三层 ——
-    # 先组装每场计划（prompt/path/caption），再并发生成 master（IO 密集），
+    # 先组装每场计划（prompt/path/caption/keywords），再并发生成 master（IO 密集），
     # 最后串行切三层 + 拼 storyboard。并发把 15 张图的墙钟时间砍到约 1/N。
+    is_en = (args.lang == "en")
     scene_plans = []
     for i, text in enumerate(story_parts, 1):
         sid = f"{i:02d}"
-        caption = format_caption(text)
-        duration = duration_for(caption)
-        visual_direction = str(
-            visual_plan.get(sid)
-            or "Stage one simple visual beat that expresses only the current sentence."
-        )
+        if is_en:
+            caption = format_caption_en(text)
+            duration = duration_for_en(caption)
+            keywords = extract_keywords(text)
+        else:
+            caption = format_caption(text)
+            duration = duration_for(caption)
+            keywords = []
+        # visual_plan 支持两种格式：
+        #   纯字符串："01": "A rabbit in a meadow"（直接当视觉方向）
+        #   英文模式 dict："01": {"direction": "...", "keywords": ["word1"]}（覆盖关键词）
+        vp_entry = visual_plan.get(sid)
+        if isinstance(vp_entry, dict):
+            visual_direction = str(vp_entry.get("direction", ""))
+            if is_en and vp_entry.get("keywords"):
+                keywords = list(vp_entry["keywords"])
+        else:
+            visual_direction = str(
+                vp_entry
+                or ("A simple colorful illustration related to the sentence meaning, clean educational style."
+                    if is_en
+                    else "Stage one simple visual beat that expresses only the current sentence.")
+            )
         master_path = asset_dir / f"{sid}_master.png"
-        prompt = build_master_prompt(
-            text=text, caption=caption, visual_direction=visual_direction,
-            character_lock=args.character_lock, text_mode_image2=(args.text_mode == "image2"),
-            has_character_ref=use_character_ref,
-        )
+        if is_en:
+            prompt = build_english_flashcard_prompt(
+                sentence=text, keywords=keywords, visual_direction=visual_direction,
+            )
+        else:
+            prompt = build_master_prompt(
+                text=text, caption=caption, visual_direction=visual_direction,
+                character_lock=args.character_lock, text_mode_image2=(args.text_mode == "image2"),
+                has_character_ref=use_character_ref,
+            )
         (prompt_dir / f"{sid}_master.txt").write_text(prompt + "\n", encoding="utf-8")
-        scene_plans.append({
+        plan_entry = {
             "sid": sid, "text": text, "caption": caption,
             "duration": duration, "master_path": master_path, "prompt": prompt,
-        })
+        }
+        if is_en:
+            plan_entry["keywords"] = keywords
+        scene_plans.append(plan_entry)
 
     def _gen_master(plan):
+        # Returns (sid, error). The error path matters: as_completed() alone
+        # does NOT re-raise worker exceptions, so without capturing them here
+        # a failed apiz call (balance 429, network timeout, ...) used to look
+        # like success while leaving an empty asset directory.
         sid = plan["sid"]
         master_path = plan["master_path"]
         if args.dry_run:
             print(f"\n[{sid}] [dry-run] prompt first 200 chars: {plan['prompt'][:200]}...")
-            return sid
+            return sid, None
         if master_path.exists() and not args.force:
             print(f"[{sid}] master 已存在，跳过")
-            return sid
+            return sid, None
         print(f"[{sid}] 生成 master ({args.backend}) ...")
-        if args.backend == "agnes":
-            agnes_generate_image(
-                prompt=plan["prompt"], out_path=master_path,
-                model=AGNES_DEFAULT_MODEL, size="2K", ratio="2:3",
-                image_ref=char_ref_path if (char_ref_path and char_ref_path.exists()) else None,
-            )
-        else:
-            apiz_generate_image(
-                prompt=plan["prompt"], out_path=master_path, model=args.model,
-                image_size="portrait_4_3", image_url=char_ref_url,
-            )
-        print(f"[{sid}] ✓ done")
-        return sid
+        try:
+            if args.backend == "agnes":
+                agnes_generate_image(
+                    prompt=plan["prompt"], out_path=master_path,
+                    model=AGNES_DEFAULT_MODEL, size="2K", ratio="2:3",
+                    image_ref=char_ref_path if (char_ref_path and char_ref_path.exists()) else None,
+                )
+            else:
+                apiz_generate_image(
+                    prompt=plan["prompt"], out_path=master_path, model=args.model,
+                    image_size="portrait_4_3", image_url=char_ref_url,
+                )
+            # apiz CLI has been observed returning exit 0 without writing a
+            # file when the account is below the minimum balance. Verify the
+            # file actually landed and is non-trivial before declaring success,
+            # otherwise the missing file silently propagates into a broken
+            # render hours later.
+            size = master_path.stat().st_size if master_path.exists() else 0
+            if size < 1024:
+                raise RuntimeError(
+                    f"generation reported success but {master_path.name} "
+                    f"is missing or empty (size={size})"
+                )
+            print(f"[{sid}] ✓ done")
+            return sid, None
+        except Exception as e:
+            return sid, e
 
     if not args.dry_run:
         todo = [p for p in scene_plans if args.force or not p["master_path"].exists()]
         if todo:
             workers = max(1, min(args.concurrency, len(todo)))
             print(f"\nℹ️  并发生成 {len(todo)} 张 master（workers={workers}）...")
+            failures: list[tuple[str, Exception]] = []
             with ThreadPoolExecutor(max_workers=workers) as ex:
-                list(as_completed([ex.submit(_gen_master, p) for p in todo]))
+                futures = [ex.submit(_gen_master, p) for p in todo]
+                for fut in as_completed(futures):
+                    sid, err = fut.result()
+                    if err is not None:
+                        failures.append((sid, err))
+                        print(f"[{sid}] ✗ {err}", file=sys.stderr)
+            if failures:
+                hints = []
+                if args.backend == "apiz":
+                    hints.append(
+                        "apiz 余额不足？跑 `apiz account balance` 检查"
+                        "（nano-banana-2 要求账户至少 10 元）"
+                    )
+                hints.append("网络/模型临时不可用？重跑脚本会自动跳过已成功的场次")
+                hint_text = "\n  ".join(hints)
+                failed_ids = ", ".join(sid for sid, _ in failures)
+                raise SystemExit(
+                    f"\n✗ {len(failures)}/{len(todo)} 张 master 生成失败：{failed_ids}\n"
+                    f"  {hint_text}"
+                )
         else:
             print("\nℹ️  所有 master 已存在，跳过生成")
 
@@ -641,28 +1013,45 @@ def main():
             )
         else:
             assets = {
-                "text_image": f"assets/generated/{asset_set}/{sid}_text.png" if args.text_mode == "image2" else None,
+                "text_image": (
+                    f"assets/generated/{asset_set}/{sid}_text.png" if args.text_mode == "image2" else None
+                ),
                 "bw": f"assets/generated/{asset_set}/{sid}_bw.png",
                 "detail": None,
                 "color": f"assets/generated/{asset_set}/{sid}_color.png",
             }
-        scenes.append({
+        scene_layers = ["text", "bw_full", "color"]
+        scene_entry = {
             "id": sid,
             "duration_sec": plan["duration"],
             "text": plan["caption"],
             "narration": plan["text"],
-            "visual": f"根据文案绘制一个单一、清楚、可画的白底日记漫画场景：{plan['text']}",
+            "visual": (
+                f"English textbook flashcard: sentence in the top band, simple colorful illustration below; "
+                f"keywords with IPA phonetics are small labels overlaid on the bottom-left of the illustration. "
+                f"Sentence: {plan['text']}"
+                if is_en
+                else f"根据文案绘制一个单一、清楚、可画的白底日记漫画场景：{plan['text']}"
+            ),
             "shot": "story_beat",
-            "layers": ["text", "bw_full", "color"],
-            "color_hint": "仅使用元视频的鼠尾草绿、灰蓝、浅棕、砖红、暖黄等低饱和蜡笔色，保留大量纯白",
+            "layers": scene_layers,
+            "color_hint": (
+                "Soft bright educational colors — sage green, dusty blue, warm tan, brick red, warm yellow; keep most of the canvas clean white"
+                if is_en
+                else "仅使用元视频的鼠尾草绿、灰蓝、浅棕、砖红、暖黄等低饱和蜡笔色，保留大量纯白"
+            ),
             "detail_hint": None,
             "assets": assets,
-        })
+        }
+        if is_en:
+            scene_entry["keywords"] = plan.get("keywords", [])
+        scenes.append(scene_entry)
 
     # —— Step 3: 写 storyboard.json ——
     storyboard = {
         "project": {
             "title": args.title,
+            "lang": args.lang,
             "mode": "speed",
             "images_per_scene": 1,
             "derive_bw": "local",
@@ -675,12 +1064,13 @@ def main():
             "fps": 30,
             "transition": args.transition,
             "transition_sec": args.transition_sec,
-            "style_lock": STYLE_LOCK,
+            "style_lock": STYLE_LOCK_EN if is_en else STYLE_LOCK,
             "character_lock": args.character_lock,
             "image_generator": f"{args.backend}-{'agnes-image-2.1-flash' if args.backend == 'agnes' else 'nano-banana-2'}",
             "audio": {
                 "voiceover": "pending",  # 跑完 gen_tts + apply_timeline 后变 'active'
                 "default_backend": "edge",  # 免费 edge-tts；要高质量加 --backend minimax
+                "default_voice": "en-US-JennyNeural" if is_en else "zh-CN-XiaoyiNeural",
                 "bgm": "optional_bed_only",
                 "bgm_follows_text": False,
             },
@@ -694,8 +1084,11 @@ def main():
     )
     print(f"\n{'='*60}")
     print(f"✓ storyboard 写入 {out_path}")
-    print(f"  场景数: {len(scenes)}")
+    print(f"  语言: {args.lang} | 场景数: {len(scenes)}")
     print(f"  转场: {args.transition}" + (f" ({args.transition_sec}s)" if args.transition == "page-flip" else ""))
+    if is_en:
+        print(f"  英文教学模式：每张图含句子+关键词音标+插画（教育闪卡）")
+        print(f"  TTS 用 en-US-JennyNeural（narration.yaml voice 字段）")
     if args.dry_run:
         print("\n[dry-run] 没有实际生成图片。去掉 --dry-run 跑实际生成。")
     else:

@@ -64,19 +64,24 @@ python gen_story_images.py story.txt \
   --character-lock "固定主角：小红，8岁女孩，圆脸，黑色齐刘海短发，红色棉袄、黑裤子、白球鞋；奶奶，60岁，灰白发盘髻，深蓝对襟褂子、灰裤、黑布鞋。两人比例跨场景一致。"
 ```
 
-## 三、caption_panel 坐标规范（image2 模式）
+## 三、caption_panel 规范（image2 模式）
+
+> 本节针对**中文 image2**（apiz 中文，顶部字幕带 + 下方方形插画）。英文教学闪卡（`--lang en`）走**两段式但顶部只放句子**：顶部带 y≈0-510 只写英文句子，下方方形插画 y≈512-1536 是彩色插画 + 关键词 IPA 小字叠在插画左下角。ffmpeg 仍在 y≈512 做水平裁切，但切线上方只有纯白底+句子（无 IPA 行），不会被截断。见 `gen_story_images.py` 的 `build_english_flashcard_prompt`。
 
 ```
-Top copy panel (pixels y=0–510): pure white background.
+Top copy panel (roughly the top third of the card): pure white background.
 Write ONLY this Simplified Chinese caption verbatim, preserving the explicit line breaks:
 "<caption text with \n>"
-Use thick casual black felt-tip handwriting, 1–3 lines only, generous 48-pixel
-left/right margins, and a large readable letter size. Do not put any illustration
-or decorative mark in this panel. Do not place text below y=510.
+Use thick casual black felt-tip handwriting, one to three lines only, generous
+left and right margins, and a large readable letter size. Do not put any illustration
+or decorative mark in this top panel. Keep all text in the top panel; do not write
+text inside the illustration area below.
 ```
 
-**坐标解释**：
-- master 是 1024×1536（portrait）
+> ⚠️ **prompt 里不要写像素坐标**（`y=510`、`1024×1024`、`48-pixel`、`10%`）。nano-banana-2 会把这些数字 literally 画到图上（实测卡片边缘出现 `0 / 510 / 512 / 1536 / 8% / 10%`）。用 "top third"、"bottom two-thirds"、"generous margins" 这种相对描述。ffmpeg crop 的像素坐标是后处理，不进 prompt。
+
+**ffmpeg 切分坐标**（仅内部用，不写进 prompt）：
+- master 归一化到 1024×1536（portrait）
 - y=0–510：字幕区（高度 510px ≈ 33% 总高，可容纳 2-3 行大字）
 - y=510–512：白色过渡带（极窄，2px）
 - y=512–1536：插画区（1024×1024 正方形）
@@ -85,28 +90,27 @@ or decorative mark in this panel. Do not place text below y=510.
 
 **为什么字幕区给到 y=510（而不是 22% 标准比例的 y=342）**：nano-banana-2 的中文字号偏大，2 行字幕实际会画到 y=460-500。原来 y=342 的硬限会让第 2 行被切。提到 y=510 给足空间，TextWipe 容器同步加高到 420px。
 
-## 四、illustration_panel 坐标规范
+## 四、illustration_panel 规范
 
 ```
-Illustration panel (pixels y=512–1536): use this exact lower 1024×1024 square
-for the scene. Keep the upper 510-pixel copy panel completely free of any illustration.
+Illustration panel (the bottom two-thirds of the card, a square area below the text):
+use this area for the scene. Keep the top copy panel completely free of any illustration.
 ```
 
-`ffmpeg` 的 color 层 crop 公式 `crop=1024:1024:0:512` 完全对应这个坐标，**改一处必须同步改另一处**（gen_story_images.py 的 `split_master_into_layers` 函数）。
+`ffmpeg` 的 color 层 crop 公式 `crop=1024:1024:0:512` 对应这个分区，**改一处必须同步改另一处**（gen_story_images.py 的 `split_master_into_layers` 函数）。注意：crop 坐标是代码里的，不要回写进 prompt。
 
-## 五、safe border 10% 硬规则
+## 五、safe border 硬规则
 
-每场 master prompt 末尾必须有：
+每场 master prompt 末尾必须有（用相对描述，不要写百分比数字）：
 
 ```
-Reserve a clean white safe border of at least 10% on the left and right and 8% on
-the top and bottom. Every figure, limb, prop, building edge, roof, tree branch,
-rain stroke and motion mark must stay completely inside that safe border.
-Scale the scene down when necessary; never let any visible mark touch or cross
-a canvas edge.
+Leave a clear white margin around all edges so no visible mark — figure, limb,
+prop, building edge, roof, tree branch, rain stroke or motion mark — touches
+or crosses a canvas edge. Scale the scene down when necessary and keep generous
+white negative space.
 ```
 
-**为什么**：Remotion 渲染时 `objectFit: 'contain'` 会保持图片完整不裁，但如果原图本身就贴边，contain 后会显得拥挤。safe border 强制 apiz 自己留白。
+**为什么**：Remotion 渲染时 `objectFit: 'contain'` 会保持图片完整不裁，但如果原图本身就贴边，contain 后会显得拥挤。safe border 强制 apiz 自己留白。不要写 `10%` / `8%`，模型会把数字画到图上。
 
 ## 六、配色约束（蜡笔五色）
 
@@ -190,8 +194,8 @@ arranged side by side.
 Character lock: <你的 character_lock>
 Style: <style_lock>
 Composition: pure white square canvas, all uncropped full-body poses centered
-with generous spacing and a clean 10% safe border. No scenery, furniture, extra
-people, props or decorative marks.
+with generous spacing and a clean white margin around all edges. No scenery,
+furniture, extra people, props or decorative marks.
 
 Color: selective muted wax-crayon color only. Follow the clothing colors in the
 character lock, use black scribbles for hair and dark trousers, and leave skin
@@ -236,11 +240,11 @@ python gen_story_images.py examples/story.txt --title "..." --force
 
 | 现象 | 原因 | 修复 |
 |---|---|---|
-| 主角脸不一样 | 没用 character_reference | 不要 `--no-character-ref` |
+| 主角脸不一样 | 默认纯文生图不保证同一张脸 | 用户明确要求跨场一致才加 `--character-ref` + `--character-lock` |
 | 提到父亲时奶奶也在 | narrative isolation 没生效 | 检查 prompt 末尾的 Narrative isolation 段是否完整 |
-| 字幕跑到插画区 | caption_panel 坐标错 | 检查 master prompt 里 y=0–342 段是否完整 |
+| 字幕跑到插画区 | caption_panel 相对分区描述错 | 检查 master prompt 里 "top third / bottom two-thirds" 段是否完整，不要写像素坐标 |
 | 配色太鲜艳 | style_lock 没强制 | 检查"selective muted wax-crayon only" + 五色限定 |
-| 人物头顶出画 | safe border 没生效 | 检查 prompt 末尾"safe border 10%"段是否完整 |
+| 人物头顶出画 | safe border 没生效 | 检查 prompt 末尾"clear white margin around all edges"段是否完整 |
 | 画风变精致 | 模型 fallback | 检查 apiz 是否真的用了 nano-banana-2（看 `.last_generate.json`） |
 | 画面混入禁止人物（特定种族/性别/时代错位角色/不该有的配角） | 训练先验污染（任何题材都可能） | 见下一节「训练先验污染」，按 v3 玩法重生成 |
 

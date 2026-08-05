@@ -1,6 +1,7 @@
 {
   "project": {
-    "title": "demo",
+    "title": "纸上的夏天",
+    "lang": "zh",
     "mode": "speed",
     "images_per_scene": 1,
     "derive_bw": "local",
@@ -17,11 +18,12 @@
     "transition": "cut",
     "transition_sec": 0.7,
     "style_lock": "minimalist Chinese diary comic reconstructed from the supplied reference video, pure white background, uneven black felt-tip pen outlines, naive wobbly proportions, rough dense black crayon scribbles for dark areas, sparse props, abundant negative space, selective muted wax-crayon color only, no realistic shading, no paper texture, no watermark",
-    "character_lock": "重复出现的主角须保持同一张脸、发型、年龄、服装配色和身体比例；具体人物身份以故事原文为准；不得添加原文未提及的配角、道具或文字",
-    "image_generator": "apiz-nano-banana-2",
+    "character_lock": "",
+    "image_generator": "agnes-agnes-image-2.1-flash",
     "audio": {
       "voiceover": "pending",
-      "default_backend": "minimax",
+      "default_backend": "edge",
+      "default_voice": "zh-CN-XiaoyiNeural",
       "bgm": "optional_bed_only",
       "bgm_follows_text": false
     }
@@ -42,10 +44,10 @@
       "color_hint": "仅使用元视频的鼠尾草绿、灰蓝、浅棕、砖红、暖黄等低饱和蜡笔色，保留大量纯白",
       "detail_hint": null,
       "assets": {
-        "text_image": "assets/generated/demo-65001830/01_text.png",
-        "bw": "assets/generated/demo-65001830/01_bw.png",
+        "text_image": null,
+        "bw": "assets/generated/纸上的夏天-23c299d1/01_bw.png",
         "detail": null,
-        "color": "assets/generated/demo-65001830/01_color.png"
+        "color": "assets/generated/纸上的夏天-23c299d1/01_color.png"
       }
     },
     {
@@ -63,10 +65,10 @@
       "color_hint": "仅使用元视频的鼠尾草绿、灰蓝、浅棕、砖红、暖黄等低饱和蜡笔色，保留大量纯白",
       "detail_hint": null,
       "assets": {
-        "text_image": "assets/generated/demo-65001830/02_text.png",
-        "bw": "assets/generated/demo-65001830/02_bw.png",
+        "text_image": null,
+        "bw": "assets/generated/纸上的夏天-23c299d1/02_bw.png",
         "detail": null,
-        "color": "assets/generated/demo-65001830/02_color.png"
+        "color": "assets/generated/纸上的夏天-23c299d1/02_color.png"
       }
     }
   ]

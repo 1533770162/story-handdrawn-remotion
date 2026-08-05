@@ -174,21 +174,23 @@ const PageFlipScene: React.FC<{
   );
 };
 
-const CutStoryVideo: React.FC<{value: Storyboard}> = ({value}) => (
-  <Series>
-    {value.scenes.map((scene) => (
-      <Series.Sequence
-        key={scene.id}
-        durationInFrames={Math.round(
-          scene.duration_sec * value.project.fps,
-        )}
-        name={`Scene ${scene.id}`}
-      >
-        <Scene scene={scene} />
-      </Series.Sequence>
-    ))}
-  </Series>
-);
+const CutStoryVideo: React.FC<{value: Storyboard}> = ({value}) => {
+  return (
+    <Series>
+      {value.scenes.map((scene) => (
+        <Series.Sequence
+          key={scene.id}
+          durationInFrames={Math.round(
+            scene.duration_sec * value.project.fps,
+          )}
+          name={`Scene ${scene.id}`}
+        >
+          <Scene scene={scene} />
+        </Series.Sequence>
+      ))}
+    </Series>
+  );
+};
 
 const PageFlipStoryVideo: React.FC<{value: Storyboard}> = ({value}) => {
   const transitionFrames = transitionFramesFor(value);
