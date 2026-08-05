@@ -1,6 +1,6 @@
 # story-handdrawn-remotion
 
-把一段中文故事文本变成 「手绘日记漫画风」竖屏视频。Remotion技术的视频SKill. 基于 Agnes Image +edge-tts 全免费视频制作方案。
+把一段 中文/英文 故事文本变成 「手绘日记漫画风」竖屏视频。Remotion技术的视频SKill. 基于 Agnes Image +edge-tts 全免费视频制作方案。
 
 核心方法论：**不是把一张漂亮图配文字朗读，而是把每句故事拆成「文字 → 黑白画稿 → 彩色插画」三阶段横向擦除揭示，让一句话被画出三次。**
 
