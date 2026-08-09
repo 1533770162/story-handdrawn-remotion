@@ -113,6 +113,9 @@ python scripts/gen_story_images.py examples/story_en.txt --lang en --title "Engl
 
 # dry-run 先看 prompt 不生图
 python scripts/gen_story_images.py examples/story_en.txt --lang en --dry-run
+
+# 手动运行渲染：
+npx remotion render src/index.ts Part2 out/Part2.mp4 --scale=0.5 --crf=28 --concurrency=1 --overwrite
 ```
 
 ### 英文故事写作规范

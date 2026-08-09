@@ -608,7 +608,39 @@ def build_english_flashcard_prompt(
       - 不要水平分隔线、面板边框
       - Style like Oxford English textbook
     """
-    keywords_line = ", ".join(keywords) if keywords else "(none — no keywords)"
+    if keywords:
+        keywords_line = ", ".join(keywords)
+        label_block = (
+            "- Draw the keywords and their IPA phonetics as SMALL labels overlaid ON the illustration, "
+            "stacked in the bottom-left corner of the illustration square. Each keyword is followed by its "
+            "IPA in a small clean font. Keep them small and clearly secondary to the picture (do not make a "
+            "separate text row or a caption band for them).\n"
+            "- Compose the illustration so its bottom-left corner stays light and uncluttered (open sky, a "
+            "plain wall, pale ground, or clean paper) so the small phonetic labels stay legible. Do not place "
+            "busy details or dark shapes behind the labels."
+        )
+        design_line = "- Large readable English sentence at top, small keyword/IPA labels on the picture"
+        constraints_line = (
+            "Constraints: educational, family-friendly content; the English text and phonetic symbols MUST be "
+            "clearly legible and spelled correctly; no watermark, no signature, no logo, no speech bubbles, no "
+            "stray numbers or measurement labels, no panel borders or dividing lines; no realistic shading or gradients."
+        )
+    else:
+        keywords_line = "(none — no keywords or labels of any kind)"
+        label_block = (
+            "- The illustration area must be a PURE PICTURE with NO text of any kind: no keywords, no labels, "
+            "no captions, no words, no letters, no numbers, no signs with writing, no document text, no names "
+            "on objects. Do not draw any written characters anywhere in the illustration. All written English "
+            "belongs ONLY in the top sentence band."
+        )
+        design_line = "- Large readable English sentence at top, pure text-free illustration below"
+        constraints_line = (
+            "Constraints: educational, family-friendly content; the English sentence at top MUST be clearly "
+            "legible and spelled correctly; the illustration below must contain ABSOLUTELY NO text, letters, "
+            "numbers, labels, captions, signs, or written characters of any kind; no watermark, no signature, "
+            "no logo, no speech bubbles, no stray measurement labels, no panel borders or dividing lines; no "
+            "realistic shading or gradients."
+        )
 
     # NOTE: do NOT put pixel coordinates (y=510), dimensions (1024x1024), or
     # percentages (10%, 8%) in this prompt. nano-banana-2 has been observed
@@ -628,20 +660,19 @@ Keywords (each followed by its IPA phonetic transcription): {keywords_line}
 LAYOUT:
 - Top copy band (roughly the top third of the card): pure white background. Write ONLY the English sentence here, in a large readable black sans-serif font, one or two lines, generous left and right margins. This top band contains NO keywords and NO phonetics.
 - Illustration area (the bottom two-thirds, a square below the sentence): fill this whole square with a simple colorful illustration.
-- Draw the keywords and their IPA phonetics as SMALL labels overlaid ON the illustration, stacked in the bottom-left corner of the illustration square. Each keyword is followed by its IPA in a small clean font. Keep them small and clearly secondary to the picture (do not make a separate text row or a caption band for them).
-- Compose the illustration so its bottom-left corner stays light and uncluttered (open sky, a plain wall, pale ground, or clean paper) so the small phonetic labels stay legible. Do not place busy details or dark shapes behind the labels.
+{label_block}
 - Do NOT draw any horizontal dividing line or panel border between the sentence and the illustration.
 - Illustration subject: {visual_direction}
 
 DESIGN:
-- Large readable English sentence at top, small keyword/IPA labels on the picture
+{design_line}
 - Simple colorful illustration related to sentence meaning
 - Clean educational layout, portrait orientation
 - Style like Oxford English textbook
 
 Composition: leave a clear white margin around all edges so no drawn element touches the frame edge.
 Color: soft bright educational colors — sage green, dusty blue, warm tan, brick red, warm yellow. No pure neon or fluorescent colors.
-Constraints: educational, family-friendly content; the English text and phonetic symbols MUST be clearly legible and spelled correctly; no watermark, no signature, no logo, no speech bubbles, no stray numbers or measurement labels, no panel borders or dividing lines; no realistic shading or gradients.""".strip()
+{constraints_line}""".strip()
 
 
 # ============================================================================
@@ -901,7 +932,7 @@ def main():
         vp_entry = visual_plan.get(sid)
         if isinstance(vp_entry, dict):
             visual_direction = str(vp_entry.get("direction", ""))
-            if is_en and vp_entry.get("keywords"):
+            if is_en and "keywords" in vp_entry:
                 keywords = list(vp_entry["keywords"])
         else:
             visual_direction = str(
